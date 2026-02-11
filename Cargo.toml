@@ -33,7 +33,5 @@ md5 = "0.7"
 url = "2.5"
 mpris-server = "0.8.0"
 tracing = "0.1.44"
-async-std = { version = "1.13", features = ["attributes", "unstable"] }
 zbus = "5.13.2"
-tokio-stream = "0.1.18"
 fuzzy-matcher = "0.3.7"
