@@ -42,9 +42,10 @@ impl SearchEngine {
             if let Some(score) = self
                 .matcher
                 .fuzzy_match(&track.title.to_lowercase(), &query_formatted)
-            && score > best_score {
-                    best_score = score;
-                    match_field = MatchField::Title;
+                && score > best_score
+            {
+                best_score = score;
+                match_field = MatchField::Title;
             }
             if let Some(score) = self
                 .matcher
@@ -70,9 +71,10 @@ impl SearchEngine {
             }
             let combined = format!("{} {}", track.artist, track.title).to_lowercase();
             if let Some(score) = self.matcher.fuzzy_match(&combined, &query_formatted)
-                && score > best_score {
-                    best_score = score;
-                    match_field = MatchField::Multiple;
+                && score > best_score
+            {
+                best_score = score;
+                match_field = MatchField::Multiple;
             }
             if best_score >= self.threshold {
                 results.push(SearchResult {
@@ -132,10 +134,14 @@ mod tests {
         Track {
             id: "test".to_string(),
             title,
+            album_artist: Some(artist.clone()),
             artist,
             album,
             cover_art: String::new(),
             duration: 0,
+            play_count: Some(0),
+            track_number: Some(1),
+            genres: vec!["Rock".to_string(), "Hip-Hop".to_string()],
         }
     }
     #[test]

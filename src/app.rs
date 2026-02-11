@@ -57,7 +57,7 @@ pub struct App {
     // player status
     pub on_repeat: bool,
     // Need to work on the logic to allow shuffling
-    pub on_shuffle: bool,
+    pub _on_shuffle: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +154,7 @@ impl App {
             search_engine,
             is_searching: false,
             on_repeat: false,
-            on_shuffle: true,
+            _on_shuffle: true,
         };
 
         app.refresh_library().await?;
