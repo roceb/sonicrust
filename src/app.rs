@@ -409,13 +409,30 @@ impl App {
         self.sync_mpris().await;
         Ok(())
     }
+
+    async fn play_from_queue(&mut self, index: usize) -> Result<()> {
+        if let Some(track) = self.queue.get(index).cloned() {
+            let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
+            let mut player = self.player.lock().await;
+            player.load_url(&stream_url).await?;
+            player.play()?;
+            self.is_playing = true;
+            self.current_track = Some(track.clone());
+            self.playing_index = index;
+            self.metadata = track_to_metadata(&track);
+            drop(player);
+            self.sync_mpris().await;
+        }
+        Ok(())
+    }
     pub async fn play_next(&mut self) -> Result<()> {
         if !self.queue.is_empty() && self.playing_index < self.queue.len() - 1 {
-            self.playing_index += 1;
-            self.play_selected(self.playing_index).await?;
+            self.play_from_queue(self.playing_index + 1).await?;
         } else {
             self.player.lock().await.stop()?;
             self.is_playing = false;
+            self.current_track = None;
+            self.metadata = Metadata::default();
             self.sync_mpris().await;
         }
         Ok(())
@@ -423,11 +440,11 @@ impl App {
 
     pub async fn play_previous(&mut self) -> Result<()> {
         if !self.queue.is_empty() && self.playing_index > 0 {
-            self.playing_index -= 1;
-            self.play_selected(self.playing_index).await?;
+            self.play_from_queue(self.playing_index - 1).await?;
         } else {
             self.player.lock().await.stop()?;
             self.is_playing = false;
+            self.metadata = Metadata::default();
             self.sync_mpris().await;
         }
         Ok(())
@@ -581,9 +598,7 @@ impl App {
         if self.on_repeat {
             self.play_selected(self.playing_index).await?;
         } else if self.playing_index < self.queue.len().saturating_sub(1) {
-            self.playing_index += 1;
-            self.queue_state.select(Some(self.playing_index));
-            self.play_selected(self.playing_index).await?;
+            self.play_next().await?;
         } else {
             self.is_playing = false;
             self.current_track = None;
