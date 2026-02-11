@@ -21,10 +21,9 @@ impl MprisPlayer {
         Self { command_tx, state }
     }
     fn send_command(&self, cmd: PlayerCommand) {
-        let tx = self.command_tx.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(cmd).await;
-        });
+        if let Err(e) = self.command_tx.try_send(cmd) {
+            eprintln!("Failed to send MPRIS command: {}", e);
+        }
     }
 }
 impl RootInterface for MprisPlayer {
