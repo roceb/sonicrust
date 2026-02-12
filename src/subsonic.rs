@@ -127,8 +127,8 @@ struct Song {
 }
 
 #[derive(Deserialize, Debug)]
-struct Genres{
-    name: String
+struct Genres {
+    name: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -197,12 +197,12 @@ impl SubsonicClient {
                 artist: song.artist,
                 album_artist: song.display_album_artist,
                 album: song.album,
-                cover_art: cover_art_url.to_string(),
+                cover_art: Some(cover_art_url.to_string()),
                 duration,
                 track_number: song.track_number,
                 // genre: song.genre,
                 play_count: song.play_count,
-                genres: song.genres.iter().map(|f| f.name.clone()).collect()
+                genres: song.genres.iter().map(|f| f.name.clone()).collect(),
             });
         }
 
@@ -320,12 +320,12 @@ impl SubsonicClient {
                 artist: song.artist,
                 album_artist: song.display_album_artist,
                 album: song.album,
-                cover_art: cover_art.to_string(),
+                cover_art: Some(cover_art.to_string()),
                 duration: length,
                 track_number: song.track_number,
                 // genre: song.genre,
                 play_count: song.play_count,
-                genres: song.genres.iter().map(|f| f.name.clone()).collect()
+                genres: song.genres.iter().map(|f| f.name.clone()).collect(),
             });
         }
         Ok(tracks)

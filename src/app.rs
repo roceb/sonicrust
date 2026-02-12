@@ -8,12 +8,12 @@ use crate::{
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::future;
+use image::DynamicImage;
 use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
 use ratatui::widgets::ListState;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
-    rc::Rc,
-    sync::{Arc, RwLock},
-    time::Duration,
+    io::Cursor, rc::Rc, sync::{Arc, RwLock}, time::Duration
 };
 use tokio::{
     sync::{Mutex, mpsc},
@@ -58,6 +58,7 @@ pub struct App {
     pub on_repeat: bool,
     // Need to work on the logic to allow shuffling
     pub _on_shuffle: bool,
+    pub cover_art_protocol: Option<StatefulProtocol>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +73,7 @@ pub struct Track {
     pub artist: String,
     pub album_artist: Option<String>,
     pub album: String,
-    pub cover_art: String,
+    pub cover_art: Option<String>,
     pub duration: i64,
     pub track_number: Option<i32>,
     // pub genre: Option<String>,
@@ -155,6 +156,7 @@ impl App {
             is_searching: false,
             on_repeat: false,
             _on_shuffle: true,
+            cover_art_protocol: None,
         };
 
         app.refresh_library().await?;
@@ -244,6 +246,35 @@ impl App {
         }
         Ok(())
     }
+    pub async fn load_cover_art_for_track(&mut self, track: &Track) {
+        self.cover_art_protocol = None;
+        if let Some(url) = &track.cover_art &&
+             !url.is_empty() {
+                match self.fetch_cover_art(url).await {
+                    Ok(img) => {
+                        if let Ok(picker) = Picker::from_query_stdio() {
+                            self.cover_art_protocol = Some(picker.new_resize_protocol(img));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("failed to load cover art: {}", e);
+                    }
+                }
+        }
+    }
+    async fn fetch_cover_art(
+        &self,
+        url: &str,
+    ) -> Result<DynamicImage, Box<dyn std::error::Error + Send + Sync>> {
+        let url = url.to_string();
+        tokio::task::spawn_blocking(move ||{
+            let res = reqwest::blocking::get(&url)?;
+            let bytes = res.bytes()?;
+            let img = image::load(Cursor::new(bytes), image::ImageFormat::from_path(&url).unwrap_or(image::ImageFormat::Jpeg),)?;
+            Ok(img)
+        }).await?
+    }
+
 
     /// Perform local fuzzy search on loaded tracks
     fn perform_local_search(&mut self) {
@@ -381,6 +412,8 @@ impl App {
             self.current_track = Some(track.clone());
             self.playing_index = self.selected_queue_index;
             self.metadata = track_to_metadata(&track);
+            drop(player);
+            self.load_cover_art_for_track(&track).await;
         } else {
             let player = self.player.lock().await;
             player.stop()?;
@@ -421,6 +454,7 @@ impl App {
             self.playing_index = index;
             self.metadata = track_to_metadata(&track);
             drop(player);
+            self.load_cover_art_for_track(&track).await;
             self.sync_mpris().await;
         }
         Ok(())

@@ -1,41 +1,210 @@
-use crate::app::{ActiveTab, App, InputMode};
+use crate::app::{ActiveTab, App, InputMode, Track};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Tabs},
 };
+use ratatui_image::StatefulImage;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
+            Constraint::Length(6),
             Constraint::Length(3),
-            Constraint::Length(2),
             Constraint::Min(0),
             Constraint::Length(3),
         ])
         .split(f.area());
     let _theme = app.config.theme.clone();
-    draw_header(f, app, main_chunks[0]);
+    draw_playback_header(f, app, main_chunks[0]);
     draw_tabs(f, app, main_chunks[1]);
     draw_content_area(f, app, main_chunks[2]);
     draw_player_controls(f, app, main_chunks[3]);
 }
 
-fn draw_header(f: &mut Frame, _app: &App, area: Rect) {
+fn draw_playback_header(f: &mut Frame, app: &mut App, area: Rect) {
     // TODO:Add custom styling form the config file
-    let header = Paragraph::new("SonicRust")
-        .style(
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+    f.render_widget(block.clone(), area);
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if let Some(track) = &app.current_track.clone() {
+        let header_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), //Track info
+                Constraint::Length(1), //Progress bar
+            ])
+            .split(inner_area);
+        let player_info_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(8), //Cover art area
+                Constraint::Min(0),    //Track info
+            ])
+            .split(header_chunks[0]);
+        draw_cover_art(f, app, track, player_info_chunks[0]);
+        draw_track_info(f, app, track, player_info_chunks[1]);
+        draw_progress_bar(f, app, track, header_chunks[1]);
+    } else {
+        let placeholder = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("♪ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "No track playing",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]),
+            Line::from(vec![Span::styled(
+                "Select a track and press Enter to play",
+                Style::default().fg(Color::DarkGray),
+            )]),
+        ])
+        .alignment(Alignment::Center);
+        f.render_widget(placeholder, inner_area);
+    }
+}
+
+fn draw_cover_art(f: &mut Frame, app: &mut App, track: &Track, area: Rect) {
+    // dont render if it is too small
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    match &track.cover_art {
+        Some(url) if !url.is_empty() => {
+            if let Some(ref mut protocol) = app.cover_art_protocol {
+                let image_widget = StatefulImage::default();
+                f.render_stateful_widget(image_widget, area, protocol);
+            } else {
+                draw_cover_placeholder(f, area);
+            }
+        }
+        _ => {
+            draw_cover_placeholder(f, area);
+        }
+    }
+}
+fn draw_cover_placeholder(f: &mut Frame, area: Rect) {
+    let placeholder = Paragraph::new("♪")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    f.render_widget(placeholder, area);
+}
+fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect) {
+    let status_icon = if app.is_playing { "▶" } else { "⏸" };
+    let status_color = if app.is_playing {
+        Color::LightGreen
+    } else {
+        Color::LightYellow
+    };
+    let repeat_indicator = if app.on_repeat {
+        Span::styled("repeat: on", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled("repeat: off", Style::default().fg(Color::DarkGray))
+    };
+    let shuffle_indicator = if app._on_shuffle {
+        Span::styled("shuffle: on", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled("shuffle: off", Style::default().fg(Color::DarkGray))
+    };
+    let info_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", status_icon),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                &track.title,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" — ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&track.artist, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()), // Indent to align with title
+            // Span::styled("💿 ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                &track.album,
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()), // Indent
+            // Span::styled("🔊 ", Style::default().fg(Color::DarkGray)),
+            // Span::styled(volume_indicator, Style::default().fg(volume_color)),
+            Span::styled(
+                format!("Volume {:.0}%  ", app.current_volume * 100.0),
+                Style::default().fg(Color::Gray),
+            ),
+            repeat_indicator,
+            Span::styled("  ", Style::default()), // Indent
+            shuffle_indicator,
+        ]),
+    ];
+    let track_info = Paragraph::new(info_lines);
+    f.render_widget(track_info, area);
+}
+fn draw_progress_bar(f: &mut Frame, app: &App, track: &Track, area: Rect) {
+    let current_pos = if let Ok(state) = app.shared_state.read() {
+        state.position.as_secs()
+    } else {
+        0
+    };
+    let total_duration = track.duration / 1_000_000;
+    let progress_ratio = if total_duration > 0 {
+        (current_pos as f64 / total_duration as f64).min(1.0)
+    } else {
+        0.0
+    };
+
+    let current_time = format_duration(current_pos);
+    let total_time = format_duration(total_duration);
+    let time_display = format!("{}/{}", current_time, total_time);
+
+    let gauge = Gauge::default()
+        .gauge_style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::LightGreen)
+                .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(header, area);
+        .ratio(progress_ratio)
+        .label(Span::styled(
+            time_display,
+            Style::default()
+                .fg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    f.render_widget(gauge, area);
+}
+fn format_duration(sec: i64) -> String {
+    let mins = sec / 60;
+    let secs = sec % 60;
+    format!("{}:{:02}", mins, secs)
 }
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let tab_titles: Vec<Line> = vec![
@@ -53,9 +222,12 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         ActiveTab::Search => 4,
     };
     let tabs = Tabs::new(tab_titles)
-        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM))
+        .block(
+            Block::default()
+                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT | Borders::BOTTOM),
+        )
         .select(selected_tab_index)
-        .style(Style::default().fg(Color::LightCyan))
+        .style(Style::default().fg(Color::DarkGray))
         .highlight_style(
             Style::default()
                 .fg(Color::Cyan)
@@ -348,20 +520,9 @@ fn draw_track_list(f: &mut Frame, type_of_track: &str, app: &mut App, area: Rect
     }
     f.render_stateful_widget(track_list, area, &mut state_of_list);
 }
-fn draw_player_controls(f: &mut Frame, app: &App, area: Rect) {
-    let controls = if let Some(track) = &app.current_track {
-        let status = if app.is_playing { "▶" } else { "⏸" };
-        format!(
-            "{} {} - {} 🔉 {:.0}% | Controls: Space=Play/Pause ↑/↓=Navigate Enter=Play q=Quit ←/→=Seek +/-=Volume",
-            status,
-            track.artist,
-            track.title,
-            app.current_volume * 100.0
-        )
-    } else {
-        "No track playing | Controls: Space=Play/Pause ↑/↓=Navigate Enter=Play s=search q=Quit"
-            .to_string()
-    };
+fn draw_player_controls(f: &mut Frame, _app: &App, area: Rect) {
+    let controls =
+        "Controls: Space=Play/Pause ↑/↓=Navigate Enter=Play q=Quit ←/→=Seek +/-=Volume".to_string();
     let controls_widget = Paragraph::new(controls)
         .style(Style::default().fg(Color::White))
         .block(Block::default().borders(Borders::ALL).title("Controls"));

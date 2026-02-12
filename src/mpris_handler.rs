@@ -226,13 +226,17 @@ pub fn track_to_metadata(track: &Track) -> Metadata {
         track.id
     ))
     .unwrap();
+    let art_url = match track.cover_art.clone() {
+        Some(url) => url,
+        None => "".to_string(),
+    };
     Metadata::builder()
         .title(track.title.clone())
         .artist(vec![track.artist.clone()])
         .album(track.album.clone())
         .length(Time::from_micros(track.duration))
         // If you have cover art URLs
-        .art_url(track.cover_art.clone())
+        .art_url(art_url)
         .album_artist(track.album_artist.clone())
         .trackid(track_id)
         .track_number(track.track_number.unwrap_or_default())

@@ -137,7 +137,7 @@ mod tests {
             album_artist: Some(artist.clone()),
             artist,
             album,
-            cover_art: String::new(),
+            cover_art: Some(String::new()),
             duration: 0,
             play_count: Some(0),
             track_number: Some(1),
