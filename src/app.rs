@@ -6,20 +6,43 @@ use crate::{
     subsonic::SubsonicClient,
 };
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::{
+    event::{KeyCode, KeyEvent, KeyModifiers},
+    terminal::disable_raw_mode,
+};
 use futures::future;
 use image::DynamicImage;
 use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
 use ratatui::widgets::ListState;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
-    io::Cursor, rc::Rc, sync::{Arc, RwLock}, time::Duration
+    io::{self, Cursor, Write},
+    rc::Rc,
+    sync::{Arc, RwLock},
+    time::Duration,
 };
 use tokio::{
     sync::{Mutex, mpsc},
     time::interval,
 };
 
+pub struct TerminalGuard; // used to make sure terminal goes back to normal
+impl TerminalGuard {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+        );
+        let _ = io::stdout().flush();
+    }
+}
 pub struct App {
     pub config: Config,
     pub subsonic_client: Arc<SubsonicClient>,
@@ -47,6 +70,7 @@ pub struct App {
     pub album_state: ListState,
     pub search_state: ListState,
     pub active_tab: ActiveTab,
+    pub active_section: ActiveSection,
     // Search fields
     pub input_mode: InputMode,
     pub search_query: String,
@@ -95,8 +119,13 @@ pub struct Artist {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ActiveTab {
+pub enum ActiveSection {
     Queue,
+    Others,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveTab {
+    // Queue,
     Albums,
     Artists,
     Songs,
@@ -147,7 +176,8 @@ impl App {
             search_state: ListState::default(),
             mpris: mprisserver,
             command_receiver: rx,
-            active_tab: ActiveTab::Queue,
+            active_tab: ActiveTab::Songs,
+            active_section: ActiveSection::Others,
             input_mode: InputMode::Normal,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -248,18 +278,19 @@ impl App {
     }
     pub async fn load_cover_art_for_track(&mut self, track: &Track) {
         self.cover_art_protocol = None;
-        if let Some(url) = &track.cover_art &&
-             !url.is_empty() {
-                match self.fetch_cover_art(url).await {
-                    Ok(img) => {
-                        if let Ok(picker) = Picker::from_query_stdio() {
-                            self.cover_art_protocol = Some(picker.new_resize_protocol(img));
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("failed to load cover art: {}", e);
+        if let Some(url) = &track.cover_art
+            && !url.is_empty()
+        {
+            match self.fetch_cover_art(url).await {
+                Ok(img) => {
+                    if let Ok(picker) = Picker::from_query_stdio() {
+                        self.cover_art_protocol = Some(picker.new_resize_protocol(img));
                     }
                 }
+                Err(e) => {
+                    eprintln!("failed to load cover art: {}", e);
+                }
+            }
         }
     }
     async fn fetch_cover_art(
@@ -267,14 +298,17 @@ impl App {
         url: &str,
     ) -> Result<DynamicImage, Box<dyn std::error::Error + Send + Sync>> {
         let url = url.to_string();
-        tokio::task::spawn_blocking(move ||{
+        tokio::task::spawn_blocking(move || {
             let res = reqwest::blocking::get(&url)?;
             let bytes = res.bytes()?;
-            let img = image::load(Cursor::new(bytes), image::ImageFormat::from_path(&url).unwrap_or(image::ImageFormat::Jpeg),)?;
+            let img = image::load(
+                Cursor::new(bytes),
+                image::ImageFormat::from_path(&url).unwrap_or(image::ImageFormat::Jpeg),
+            )?;
             Ok(img)
-        }).await?
+        })
+        .await?
     }
-
 
     /// Perform local fuzzy search on loaded tracks
     fn perform_local_search(&mut self) {
@@ -324,85 +358,43 @@ impl App {
         Ok(())
     }
     pub fn find_selected(&self) -> usize {
-        match self.active_tab {
-            ActiveTab::Search => {
-                if !self.search_results.is_empty() {
-                    self.selected_search_index
-                } else {
-                    0
-                }
-            }
-            ActiveTab::Queue => {
+        match self.active_section {
+            ActiveSection::Queue => {
                 if !self.queue.is_empty() {
                     self.selected_queue_index
                 } else {
                     0
                 }
             }
-            ActiveTab::Artists => self.selected_queue_index,
-            ActiveTab::Songs => {
-                if !self.queue.is_empty() {
-                    self.selected_queue_index
-                } else {
-                    0
+            ActiveSection::Others => match self.active_tab {
+                ActiveTab::Search => {
+                    if !self.search_results.is_empty() {
+                        self.selected_search_index
+                    } else {
+                        0
+                    }
                 }
-            }
-            ActiveTab::Albums => self.selected_queue_index,
+                ActiveTab::Artists => self.selected_queue_index,
+                ActiveTab::Songs => {
+                    if !self.queue.is_empty() {
+                        self.selected_queue_index
+                    } else {
+                        0
+                    }
+                }
+                ActiveTab::Albums => self.selected_queue_index,
+            },
         }
     }
-    pub async fn play_selected(&mut self, songindex: usize) -> Result<()> {
+    pub async fn play_selected_section(&mut self, songindex: usize) -> Result<()> {
         let mut track_to_play: Option<Track> = None;
-        match self.active_tab {
-            ActiveTab::Queue => {
+        match self.active_section {
+            ActiveSection::Queue => {
                 track_to_play = self.queue.get(songindex).cloned();
                 self.playing_index = songindex;
             }
-            ActiveTab::Search => {
-                if let Some(track) = self.search_results.get(self.selected_search_index).cloned() {
-                    self.queue = self.search_results.clone();
-                    self.selected_queue_index = self.selected_search_index;
-                    self.playing_index = self.selected_search_index;
-                    track_to_play = Some(track);
-                }
-            }
-            ActiveTab::Songs => {
-                if let Some(track) = self.tracks.get(self.selected_index).cloned() {
-                    self.queue = vec![track.clone()];
-                    self.selected_queue_index = 0;
-                    track_to_play = Some(track);
-                    self.playing_index = self.selected_queue_index;
-                }
-            }
-            ActiveTab::Artists => {
-                if let Some(artist) = self.artists.get(self.selected_artist_index) {
-                    let artist_albums = self.subsonic_client.get_artist_albums(artist).await?;
-                    if !artist_albums.is_empty() {
-                        let songs_futures = artist_albums
-                            .iter()
-                            .map(|album| self.subsonic_client.get_songs_in_album(album));
-                        let nested_songs = future::try_join_all(songs_futures).await?;
-                        let songs: Vec<Track> = nested_songs.into_iter().flatten().collect();
-                        if !songs.is_empty() {
-                            self.queue = songs;
-                            self.selected_queue_index = 0;
-                            track_to_play = self.queue.first().cloned();
-                            self.playing_index = self.selected_queue_index;
-                        }
-                    }
-                }
-            }
-            ActiveTab::Albums => {
-                if let Some(album) = self.albums.get(self.selected_album_index) {
-                    let songs = self.subsonic_client.get_songs_in_album(album).await?;
-                    if !songs.is_empty() {
-                        self.queue = songs;
-                        self.selected_queue_index = 0;
-                        track_to_play = self.queue.first().cloned();
-                        self.playing_index = self.selected_queue_index;
-                    }
-                }
-            }
-        };
+            ActiveSection::Others => (),
+        }
         if let Some(track) = track_to_play {
             let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
             let mut player = self.player.lock().await;
@@ -422,6 +414,90 @@ impl App {
         }
         self.sync_mpris().await;
         Ok(())
+    }
+    pub async fn play_selected(&mut self, songindex: usize) -> Result<()> {
+        match self.active_section {
+            ActiveSection::Queue => {
+                return self.play_selected_section(songindex).await;
+            }
+            ActiveSection::Others => {
+                let mut track_to_play: Option<Track> = None;
+                match self.active_tab {
+                    // ActiveTab::Queue => {
+                    //     track_to_play = self.queue.get(songindex).cloned();
+                    //     self.playing_index = songindex;
+                    // }
+                    ActiveTab::Search => {
+                        if let Some(track) =
+                            self.search_results.get(self.selected_search_index).cloned()
+                        {
+                            self.queue = self.search_results.clone();
+                            self.selected_queue_index = self.selected_search_index;
+                            self.playing_index = self.selected_search_index;
+                            track_to_play = Some(track);
+                        }
+                    }
+                    ActiveTab::Songs => {
+                        if let Some(track) = self.tracks.get(self.selected_index).cloned() {
+                            self.queue = vec![track.clone()];
+                            self.selected_queue_index = 0;
+                            track_to_play = Some(track);
+                            self.playing_index = self.selected_queue_index;
+                        }
+                    }
+                    ActiveTab::Artists => {
+                        if let Some(artist) = self.artists.get(self.selected_artist_index) {
+                            let artist_albums =
+                                self.subsonic_client.get_artist_albums(artist).await?;
+                            if !artist_albums.is_empty() {
+                                let songs_futures = artist_albums
+                                    .iter()
+                                    .map(|album| self.subsonic_client.get_songs_in_album(album));
+                                let nested_songs = future::try_join_all(songs_futures).await?;
+                                let songs: Vec<Track> =
+                                    nested_songs.into_iter().flatten().collect();
+                                if !songs.is_empty() {
+                                    self.queue = songs;
+                                    self.selected_queue_index = 0;
+                                    track_to_play = self.queue.first().cloned();
+                                    self.playing_index = self.selected_queue_index;
+                                }
+                            }
+                        }
+                    }
+                    ActiveTab::Albums => {
+                        if let Some(album) = self.albums.get(self.selected_album_index) {
+                            let songs = self.subsonic_client.get_songs_in_album(album).await?;
+                            if !songs.is_empty() {
+                                self.queue = songs;
+                                self.selected_queue_index = 0;
+                                track_to_play = self.queue.first().cloned();
+                                self.playing_index = self.selected_queue_index;
+                            }
+                        }
+                    }
+                };
+                if let Some(track) = track_to_play {
+                    let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
+                    let mut player = self.player.lock().await;
+                    player.load_url(&stream_url).await?;
+                    player.play()?;
+                    self.is_playing = true;
+                    self.current_track = Some(track.clone());
+                    self.playing_index = self.selected_queue_index;
+                    self.metadata = track_to_metadata(&track);
+                    drop(player);
+                    self.load_cover_art_for_track(&track).await;
+                } else {
+                    let player = self.player.lock().await;
+                    player.stop()?;
+                    self.is_playing = false;
+                    self.current_track = None;
+                }
+                self.sync_mpris().await;
+                Ok(())
+            }
+        }
     }
 
     pub async fn toggle_playback(&mut self) -> Result<()> {
@@ -643,7 +719,7 @@ impl App {
     }
     pub fn select_tab(&mut self, tab: ActiveTab) {
         match self.active_tab {
-            ActiveTab::Queue => self.queue_state.select(None),
+            // ActiveTab::Queue => self.queue_state.select(None),
             ActiveTab::Songs => self.list_state.select(None),
             ActiveTab::Artists => self.artist_state.select(None),
             ActiveTab::Albums => self.album_state.select(None),
@@ -657,9 +733,9 @@ impl App {
 
         // Initialize new tab state
         match tab {
-            ActiveTab::Queue if !self.queue.is_empty() => {
-                self.queue_state.select(Some(self.selected_queue_index));
-            }
+            // ActiveTab::Queue if !self.queue.is_empty() => {
+            //     self.queue_state.select(Some(self.selected_queue_index));
+            // }
             ActiveTab::Songs if !self.tracks.is_empty() => {
                 self.list_state.select(Some(self.selected_index));
             }
@@ -676,62 +752,49 @@ impl App {
         }
     }
     pub fn next_tab(&mut self) {
-        self.active_tab = match self.active_tab {
-            ActiveTab::Queue => {
-                self.queue_state.select(None);
-                ActiveTab::Songs
+        self.active_section = match self.active_section {
+            ActiveSection::Queue => ActiveSection::Others,
+            ActiveSection::Others => ActiveSection::Queue,
+        };
+        match self.active_section {
+            ActiveSection::Queue => {
+                if !self.queue.is_empty() {
+                    self.queue_state.select(Some(self.selected_queue_index));
+                }
             }
-            ActiveTab::Songs => {
-                self.artist_state.select(None);
-                ActiveTab::Artists
-            }
-            ActiveTab::Artists => {
-                self.album_state.select(None);
-                ActiveTab::Albums
-            }
-            ActiveTab::Albums => {
-                self.list_state.select(None);
-                ActiveTab::Search
-            }
-            ActiveTab::Search => {
-                self.list_state.select(None);
-                ActiveTab::Queue
+            ActiveSection::Others => {
+                // ActiveTab::Queue => {
+                //     self.queue_state.select(None);
+                //     ActiveTab::Songs
+                // }
+                match self.active_tab {
+                    ActiveTab::Songs => {
+                        self.artist_state.select(Some(self.selected_index));
+                    }
+                    ActiveTab::Artists => {
+                        self.album_state.select(Some(self.selected_artist_index));
+                    }
+                    ActiveTab::Albums => {
+                        self.list_state.select(Some(self.selected_album_index));
+                    }
+                    ActiveTab::Search => {
+                        self.list_state.select(Some(self.selected_search_index));
+                    }
+                }
             }
         };
     }
     pub fn previous_tab(&mut self) {
-        self.active_tab = match self.active_tab {
-            ActiveTab::Artists => {
-                self.list_state.select(None);
-                ActiveTab::Songs
-            }
-            ActiveTab::Albums => {
-                self.artist_state.select(None);
-                ActiveTab::Artists
-            }
-            ActiveTab::Songs => {
-                self.album_state.select(None);
-                ActiveTab::Queue
-            }
-            ActiveTab::Queue => {
-                self.queue_state.select(None);
-                ActiveTab::Search
-            }
-            ActiveTab::Search => {
-                self.list_state.select(None);
-                ActiveTab::Albums
-            }
-        };
+        self.next_tab();
     }
     pub fn next_item_in_tab(&mut self) {
-        match self.active_tab {
-            ActiveTab::Queue => {
+        match self.active_section {
+            ActiveSection::Queue => {
                 if !self.queue.is_empty() {
                     let i = if let Some(selected) = self.queue_state.selected() {
                         (selected + 1) % self.queue.len()
                     } else {
                         0
-                        // self.queue_state.select(None);
                     };
                     self.selected_queue_index = i;
                     self.queue_state.select(Some(self.selected_queue_index));
@@ -739,63 +802,65 @@ impl App {
                     self.queue_state.select(None);
                 }
             }
-            ActiveTab::Search => {
-                if !self.search_results.is_empty() {
-                    let i = if let Some(selected) = self.search_state.selected() {
-                        (selected + 1) % self.search_results.len()
+            ActiveSection::Others => match self.active_tab {
+                ActiveTab::Search => {
+                    if !self.search_results.is_empty() {
+                        let i = if let Some(selected) = self.search_state.selected() {
+                            (selected + 1) % self.search_results.len()
+                        } else {
+                            0
+                        };
+                        self.selected_search_index = i;
+                        self.search_state.select(Some(self.selected_search_index));
                     } else {
-                        0
-                    };
-                    self.selected_search_index = i;
-                    self.search_state.select(Some(self.selected_search_index));
-                } else {
-                    self.search_state.select(None);
+                        self.search_state.select(None);
+                    }
                 }
-            }
-            ActiveTab::Songs => {
-                if !self.tracks.is_empty() {
-                    let i = if let Some(selected) = self.list_state.selected() {
-                        (selected + 1) % self.tracks.len()
+                ActiveTab::Songs => {
+                    if !self.tracks.is_empty() {
+                        let i = if let Some(selected) = self.list_state.selected() {
+                            (selected + 1) % self.tracks.len()
+                        } else {
+                            0
+                        };
+                        self.selected_index = i;
+                        self.list_state.select(Some(self.selected_index));
                     } else {
-                        0
-                    };
-                    self.selected_index = i;
-                    self.list_state.select(Some(self.selected_index));
-                } else {
-                    self.list_state.select(None);
+                        self.list_state.select(None);
+                    }
                 }
-            }
-            ActiveTab::Artists => {
-                if !self.artists.is_empty() {
-                    let i = if let Some(selected) = self.artist_state.selected() {
-                        (selected + 1) % self.artists.len()
+                ActiveTab::Artists => {
+                    if !self.artists.is_empty() {
+                        let i = if let Some(selected) = self.artist_state.selected() {
+                            (selected + 1) % self.artists.len()
+                        } else {
+                            0
+                        };
+                        self.selected_artist_index = i;
+                        self.artist_state.select(Some(self.selected_artist_index));
                     } else {
-                        0
-                    };
-                    self.selected_artist_index = i;
-                    self.artist_state.select(Some(self.selected_artist_index));
-                } else {
-                    self.artist_state.select(None);
+                        self.artist_state.select(None);
+                    }
                 }
-            }
-            ActiveTab::Albums => {
-                if !self.albums.is_empty() {
-                    let i = if let Some(selected) = self.album_state.selected() {
-                        (selected + 1) % self.albums.len()
+                ActiveTab::Albums => {
+                    if !self.albums.is_empty() {
+                        let i = if let Some(selected) = self.album_state.selected() {
+                            (selected + 1) % self.albums.len()
+                        } else {
+                            0
+                        };
+                        self.selected_album_index = i;
+                        self.album_state.select(Some(self.selected_album_index));
                     } else {
-                        0
-                    };
-                    self.selected_album_index = i;
-                    self.album_state.select(Some(self.selected_album_index));
-                } else {
-                    self.album_state.select(None);
+                        self.album_state.select(None);
+                    }
                 }
-            }
+            },
         }
     }
     pub fn previous_item_in_tab(&mut self) {
-        match self.active_tab {
-            ActiveTab::Queue => {
+        match self.active_section {
+            ActiveSection::Queue => {
                 if !self.queue.is_empty() {
                     let i = if let Some(selected) = self.queue_state.selected() {
                         if selected == 0 {
@@ -812,72 +877,76 @@ impl App {
                     self.queue_state.select(None);
                 }
             }
-            ActiveTab::Search => {
-                if !self.search_results.is_empty() {
-                    let i = if let Some(selected) = self.search_state.selected() {
-                        if selected == 0 {
-                            self.search_results.len() - 1
+            ActiveSection::Others => {
+                match self.active_tab {
+                    ActiveTab::Search => {
+                        if !self.search_results.is_empty() {
+                            let i = if let Some(selected) = self.search_state.selected() {
+                                if selected == 0 {
+                                    self.search_results.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.search_results.len().saturating_sub(1)
+                            };
+                            self.selected_search_index = i;
+                            self.search_state.select(Some(self.selected_search_index));
                         } else {
-                            selected - 1
+                            self.search_state.select(None);
                         }
-                    } else {
-                        self.search_results.len().saturating_sub(1)
-                    };
-                    self.selected_search_index = i;
-                    self.search_state.select(Some(self.selected_search_index));
-                } else {
-                    self.search_state.select(None);
-                }
-            }
-            ActiveTab::Songs => {
-                if !self.tracks.is_empty() {
-                    let i = if let Some(selected) = self.list_state.selected() {
-                        if selected == 0 {
-                            self.tracks.len() - 1
+                    }
+                    ActiveTab::Songs => {
+                        if !self.tracks.is_empty() {
+                            let i = if let Some(selected) = self.list_state.selected() {
+                                if selected == 0 {
+                                    self.tracks.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.tracks.len().saturating_sub(1)
+                            };
+                            self.selected_index = i;
+                            self.list_state.select(Some(self.selected_index));
                         } else {
-                            selected - 1
+                            self.list_state.select(None);
                         }
-                    } else {
-                        self.tracks.len().saturating_sub(1)
-                    };
-                    self.selected_index = i;
-                    self.list_state.select(Some(self.selected_index));
-                } else {
-                    self.list_state.select(None);
-                }
-            }
-            ActiveTab::Artists => {
-                if !self.artists.is_empty() {
-                    let i = if let Some(selected) = self.artist_state.selected() {
-                        if selected == 0 {
-                            self.artists.len() - 1
+                    }
+                    ActiveTab::Artists => {
+                        if !self.artists.is_empty() {
+                            let i = if let Some(selected) = self.artist_state.selected() {
+                                if selected == 0 {
+                                    self.artists.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.artists.len().saturating_sub(1)
+                            };
+                            self.selected_artist_index = i;
+                            self.artist_state.select(Some(self.selected_artist_index));
                         } else {
-                            selected - 1
+                            self.artist_state.select(None);
                         }
-                    } else {
-                        self.artists.len().saturating_sub(1)
-                    };
-                    self.selected_artist_index = i;
-                    self.artist_state.select(Some(self.selected_artist_index));
-                } else {
-                    self.artist_state.select(None);
-                }
-            }
-            ActiveTab::Albums => {
-                if !self.albums.is_empty() {
-                    let i = if let Some(selected) = self.album_state.selected() {
-                        if selected == 0 {
-                            self.albums.len() - 1
+                    }
+                    ActiveTab::Albums => {
+                        if !self.albums.is_empty() {
+                            let i = if let Some(selected) = self.album_state.selected() {
+                                if selected == 0 {
+                                    self.albums.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.albums.len().saturating_sub(1)
+                            };
+                            self.selected_album_index = i;
+                            self.album_state.select(Some(self.selected_album_index)); // Corrected
                         } else {
-                            selected - 1
+                            self.album_state.select(None);
                         }
-                    } else {
-                        self.albums.len().saturating_sub(1)
-                    };
-                    self.selected_album_index = i;
-                    self.album_state.select(Some(self.selected_album_index)); // Corrected
-                } else {
-                    self.album_state.select(None);
+                    }
                 }
             }
         }

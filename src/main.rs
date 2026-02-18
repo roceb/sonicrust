@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let _guard = app::TerminalGuard::new();
 
     let app = App::new().await?;
     let res = run_app(&mut terminal, app).await;
@@ -76,14 +77,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                     KeyCode::Char('-') => app.volume_down().await?,
                     KeyCode::Tab => app.next_tab(),
                     KeyCode::BackTab => app.previous_tab(),
-                    KeyCode::Char('1') => app.select_tab(app::ActiveTab::Queue),
-                    KeyCode::Char('2') => app.select_tab(app::ActiveTab::Songs),
-                    KeyCode::Char('3') => app.select_tab(app::ActiveTab::Artists),
-                    KeyCode::Char('4') => app.select_tab(app::ActiveTab::Albums),
-                    KeyCode::Char('5') => {
-                        app.select_tab(app::ActiveTab::Search);
-                        app.enter_search_mode();
-                    }
+                    KeyCode::Char('1') => app.select_tab(app::ActiveTab::Songs),
+                    KeyCode::Char('2') => app.select_tab(app::ActiveTab::Artists),
+                    KeyCode::Char('3') => app.select_tab(app::ActiveTab::Albums),
                     KeyCode::Char('s') => {
                         app.select_tab(app::ActiveTab::Search);
                         app.enter_search_mode();
