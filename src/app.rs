@@ -13,6 +13,7 @@ use crossterm::{
 use futures::future;
 use image::DynamicImage;
 use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
+use notify_rust::{Hint, Notification};
 use ratatui::widgets::ListState;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
@@ -293,6 +294,19 @@ impl App {
             }
         }
     }
+    async fn fetch_and_cache_image(&self, url: &str, track_id: &str) -> Result<String> {
+        println!("Currently fetching");
+        let img = self.fetch_cover_art(url).await.unwrap();
+        let mut path = std::env::temp_dir();
+        path.push("sonicrust");
+        std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
+        path.push(format!("cover_{}.jpg", track_id));
+        img.save(&path).map_err(|e| anyhow::anyhow!(e))?;
+
+        println!("Path {}", path.to_string_lossy());
+        Ok(path.to_string_lossy().to_string())
+    }
+
     async fn fetch_cover_art(
         &self,
         url: &str,
@@ -406,6 +420,7 @@ impl App {
             self.metadata = track_to_metadata(&track);
             drop(player);
             self.load_cover_art_for_track(&track).await;
+            self.notify_now_playing(&track).await?;
         } else {
             let player = self.player.lock().await;
             player.stop()?;
@@ -488,6 +503,7 @@ impl App {
                     self.metadata = track_to_metadata(&track);
                     drop(player);
                     self.load_cover_art_for_track(&track).await;
+                    self.notify_now_playing(&track).await?;
                 } else {
                     let player = self.player.lock().await;
                     player.stop()?;
@@ -510,6 +526,9 @@ impl App {
             if player.has_track_loaded() {
                 player.play()?;
                 self.is_playing = true;
+                let track = self.current_track.clone().unwrap();
+                drop(player);
+                self.notify_now_playing(&track).await?;
             }
         } else if !self.queue.is_empty() {
             self.play_selected(self.playing_index).await?;
@@ -531,6 +550,7 @@ impl App {
             self.metadata = track_to_metadata(&track);
             drop(player);
             self.load_cover_art_for_track(&track).await;
+            self.notify_now_playing(&track).await?;
             self.sync_mpris().await;
         }
         Ok(())
@@ -616,10 +636,23 @@ impl App {
         Ok(())
     }
 
+    pub async fn notify_now_playing(&mut self, track: &Track) -> Result<()> {
+        let mut notif = Notification::new()
+            .appname("Sonicrust")
+            .summary("Now playing")
+            .body(format!("{} - {}", track.title, track.artist).as_str())
+            .finalize();
+        if let Some(url) = &track.cover_art
+            && !url.is_empty()
+            && let Ok(path) = self.fetch_and_cache_image(url, &track.id).await
+        {
+            notif.hint(Hint::ImagePath(path));
+        }
+        let _ = notif.show();
+        Ok(())
+    }
     pub async fn update(&mut self) -> Result<()> {
-        // let mut mpris = self.mpris.lock().await;
         while let Ok(cmd) = self.command_receiver.try_recv() {
-            // println!("Received MPRIS command: {:?}", cmd);
             match cmd {
                 PlayerCommand::Play => {
                     if self.current_track.is_some() {

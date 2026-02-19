@@ -40,3 +40,4 @@ image = "0.25.9"
 aws-lc-rs = { version = "1", features = [
   "bindgen",
 ] } # This is a workaround for failing builds on arm. See: https://github.com/rustls/rustls/issues/1788
+notify-rust = "4.12.0"
