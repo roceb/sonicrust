@@ -198,7 +198,9 @@ impl PlayerInterface for MprisPlayer {
     async fn can_go_previous(&self) -> fdo::Result<bool> {
         match self.state.read() {
             Ok(s) => Ok(s.can_go_previous),
-            Err(_) => Ok(false),
+            Err(e) => {
+                eprintln!("Error, {}",e);
+                Ok(false)},
         }
     }
 

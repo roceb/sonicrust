@@ -618,16 +618,14 @@ impl App {
 
     pub async fn update(&mut self) -> Result<()> {
         // let mut mpris = self.mpris.lock().await;
-        self.check_track_finished().await?;
-        self.update_mpris_position().await?;
         while let Ok(cmd) = self.command_receiver.try_recv() {
-            println!("Received MPRIS command: {:?}", cmd);
+            // println!("Received MPRIS command: {:?}", cmd);
             match cmd {
                 PlayerCommand::Play => {
                     if self.current_track.is_some() {
+                        self.is_playing = true;
                         let player = self.player.lock().await;
                         player.play()?;
-                        self.is_playing = true;
                         drop(player);
                         self.sync_mpris().await;
                     } else if !self.queue.is_empty() {
@@ -635,11 +633,15 @@ impl App {
                     }
                 }
                 PlayerCommand::Pause => {
-                    let player = self.player.lock().await;
-                    player.pause()?;
-                    self.is_playing = false;
-                    drop(player);
-                    self.sync_mpris().await;
+                    if self.is_playing {
+                        self.is_playing = false;
+                        let player = self.player.lock().await;
+                        if player.has_track_loaded() {
+                            player.pause()?;
+                        }
+                        drop(player);
+                        self.sync_mpris().await;
+                    }
                 }
                 PlayerCommand::Stop => {
                     self.stop_playback().await?;
@@ -677,6 +679,9 @@ impl App {
                 }
             }
         }
+
+        self.check_track_finished().await?;
+        self.update_mpris_position().await?;
         Ok(())
     }
     async fn update_mpris_position(&mut self) -> Result<()> {
@@ -694,7 +699,7 @@ impl App {
         }
         let is_finished = {
             let player = self.player.lock().await;
-            player.is_finished()
+            player.is_finished() && player.has_track_loaded()
         };
         if is_finished {
             self.on_track_finished().await?;

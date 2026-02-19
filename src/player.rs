@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mpris_server::{Metadata, PlaybackStatus, Time};
-use rodio::OutputStreamBuilder;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::decoder::DecoderBuilder;
+use rodio::{OutputStream, OutputStreamBuilder, Sink};
 use std::time::Duration;
 use std::{
     io::Cursor,
@@ -60,8 +60,14 @@ impl Player {
         let resp = reqwest::get(url).await?;
         let bytes = resp.bytes().await?;
 
+        let data_len = bytes.len();
         let cursor = Cursor::new(bytes);
-        let source = Decoder::new(cursor)?;
+        // let source = Decoder::try_from(cursor)?;
+        let source = DecoderBuilder::new()
+            .with_data(cursor)
+            .with_seekable(true)
+            .with_byte_len(data_len as u64)
+            .build()?;
 
         let sink = Sink::connect_new(self.stream_handle.mixer());
         sink.append(source);
@@ -72,7 +78,7 @@ impl Player {
     }
     pub fn is_finished(&self) -> bool {
         match &self.sink {
-            Some(sink) => sink.empty(),
+            Some(sink) => sink.empty() && !sink.is_paused(),
             None => false,
         }
     }
@@ -105,11 +111,19 @@ impl Player {
         }
         Ok(())
     }
-    pub fn seek_relative(&self, seconds: i64) -> Result<()> {
-        // TODO: check if rodio supports seeking and implement it
-        let seconds = Duration::from_secs(seconds as u64);
+    pub fn seek_relative(&self, delta_sec: i64) -> Result<()> {
         if let Some(sink) = &self.sink {
-            let _ = sink.try_seek(seconds);
+            let current_pos = sink.get_pos();
+            let target = if delta_sec >= 0 {
+                current_pos.saturating_add(Duration::from_secs(delta_sec as u64))
+            } else {
+                let delta = -delta_sec;
+                current_pos.saturating_sub(Duration::from_secs(delta as u64))
+            };
+            if let Err(e) = sink.try_seek(target) {
+                eprintln!("Seek failed: {:?}", e);
+                return Err(anyhow::anyhow!("Seek failed: {}", e));
+            }
         }
         Ok(())
     }
