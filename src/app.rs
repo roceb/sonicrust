@@ -11,7 +11,7 @@ use crossterm::{
     terminal::disable_raw_mode,
 };
 use futures::future;
-use image::{DynamicImage};
+use image::DynamicImage;
 use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
 use notify_rust::{Hint, Notification};
 use ratatui::widgets::ListState;
@@ -108,7 +108,6 @@ pub struct Track {
     pub cover_art: Option<String>,
     pub duration: i64,
     pub track_number: Option<i32>,
-    // pub genre: Option<String>,
     pub play_count: Option<i32>,
     pub genres: Vec<String>,
 }
@@ -129,15 +128,8 @@ pub struct Playlists {
     pub id: String,
     pub name: String,
     pub song_count: i32,
-    pub duration: i64
+    pub duration: i64,
 }
-// pub struct Playlist {
-//     pub id: String,
-//     pub title: String,
-//     pub song_count: i32,
-//     pub cover_art: String,
-//     // pub songs: Vec<Track>,
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveSection {
@@ -554,6 +546,7 @@ impl App {
                     drop(player);
                     self.load_cover_art_for_track(&track).await;
                     self.notify_now_playing(&track).await?;
+                    self.subsonic_client.scrobble(&track, false).await?;
                 } else {
                     let player = self.player.lock().await;
                     player.stop()?;
@@ -602,6 +595,9 @@ impl App {
             self.load_cover_art_for_track(&track).await;
             self.notify_now_playing(&track).await?;
             self.sync_mpris().await;
+            self.subsonic_client
+                .scrobble(self.current_track.as_ref().unwrap(), false)
+                .await?;
         }
         Ok(())
     }
@@ -797,7 +793,7 @@ impl App {
     }
     async fn on_track_finished(&mut self) -> Result<()> {
         self.subsonic_client
-            .scrobble(self.current_track.as_ref().unwrap())
+            .scrobble(self.current_track.as_ref().unwrap(), true)
             .await?;
         if self.on_repeat {
             self.play_selected(self.playing_index).await?;

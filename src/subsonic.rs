@@ -60,12 +60,6 @@ struct PlaylistWrapper {
     playlist: Vec<PlaylistInfo>,
 }
 
-// #[derive(Deserialize, Debug)]
-// struct GetPlaylistResponse {
-//     // #[serde(flatten)]
-//     playlist: Playlist,
-// }
-//
 #[derive(Deserialize, Debug)]
 struct PlaylistInfo {
     id: String,
@@ -305,15 +299,12 @@ impl SubsonicClient {
         }
         let mut playlists: Vec<app::Playlists> = Vec::new();
         let response: SubsonicPlaylistsResponse = self.client.get(url).send().await?.json().await?;
-        println!("{:?}", response.subsonic_response.playlists.playlist);
         for play in response.subsonic_response.playlists.playlist {
             playlists.push(app::Playlists {
                 id: play.id,
                 song_count: play.song_count,
                 name: play.name,
-                duration: play.duration
-
-                // cover_art: play.cover_art
+                duration: play.duration, // cover_art: play.cover_art
             });
         }
         Ok(playlists)
@@ -330,11 +321,11 @@ impl SubsonicClient {
         for song in response.subsonic_response.playlist.entry {
             let mut cover_art = Url::parse(&format!("{}/rest/getCoverArt", self.base_url))?;
             let mut cover_art_params = self.get_auth_params();
-            cover_art_params.push(("id",song.id.clone()));
-            for (k,v) in cover_art_params{
+            cover_art_params.push(("id", song.id.clone()));
+            for (k, v) in cover_art_params {
                 cover_art.query_pairs_mut().append_pair(k, &v);
             }
-            log::debug!("Cover art: {:}",cover_art);
+            log::debug!("Cover art: {:}", cover_art);
             songs.push(Track {
                 id: song.id,
                 title: song.title,
@@ -382,10 +373,11 @@ impl SubsonicClient {
 
         Ok(albums)
     }
-    pub async fn scrobble(&self, track: &Track) -> Result<()> {
+    pub async fn scrobble(&self, track: &Track, submission: bool) -> Result<()> {
         let mut scrobble_url = Url::parse(&format!("{}/rest/scrobble", self.base_url))?;
         let mut params = self.get_auth_params();
         params.push(("id", track.id.clone()));
+        params.push(("submission", submission.to_string()));
         for (key, value) in params {
             scrobble_url.query_pairs_mut().append_pair(key, &value);
         }
