@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Tabs},
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{StatefulImage};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let main_chunks = Layout::default()
@@ -86,19 +86,18 @@ fn draw_cover_art(f: &mut Frame, app: &mut App, track: &Track, area: Rect) {
     if area.width < 2 || area.height < 2 {
         return;
     }
-    match &track.cover_art {
-        Some(url) if !url.is_empty() => {
-            if let Some(ref mut protocol) = app.cover_art_protocol {
-                let image_widget = StatefulImage::default();
-                f.render_stateful_widget(image_widget, area, protocol);
-            } else {
-                draw_cover_placeholder(f, area);
-            }
-        }
-        _ => {
-            draw_cover_placeholder(f, area);
-        }
+    let has_valid_cover = track
+        .cover_art
+        .as_ref()
+        .map(|url| !url.is_empty())
+        .unwrap_or(false);
+    if has_valid_cover && let Some(ref mut protocol) = app.cover_art_protocol {
+            let image_widget = StatefulImage::default();
+            f.render_stateful_widget(image_widget, area, protocol);
+            return;
+
     }
+    draw_cover_placeholder(f, area);
 }
 fn draw_cover_placeholder(f: &mut Frame, area: Rect) {
     let placeholder = Paragraph::new("♪")
@@ -214,12 +213,14 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         Line::from("Songs"),
         Line::from("Artist"),
         Line::from("Album"),
+        Line::from("Playlist"),
     ];
     let selected_tab_index = match app.active_tab {
         ActiveTab::Songs => 0,
         ActiveTab::Artists => 1,
         ActiveTab::Albums => 2,
         ActiveTab::Search => 3,
+        ActiveTab::Playlist => 4,
     };
     let tabs = Tabs::new(tab_titles)
         .block(
@@ -258,6 +259,7 @@ fn draw_content_area_with_border(f: &mut Frame, app: &mut App, area: Rect, is_ac
         Style::default().fg(Color::DarkGray)
     };
     match app.active_tab {
+        ActiveTab::Playlist => draw_playlist_styled(f, app, area, border_style, is_active),
         ActiveTab::Albums => draw_album_list_styled(f, app, area, border_style, is_active),
         ActiveTab::Artists => draw_artist_list_styled(f, app, area, border_style, is_active),
         ActiveTab::Songs => draw_song_list_styled(f, app, area, border_style, is_active),
@@ -571,6 +573,65 @@ fn draw_search_results_styled(
     }
 
     f.render_stateful_widget(results_list, area, &mut app.search_state);
+}
+fn draw_playlist_styled(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    border_style: Style,
+    is_active: bool,
+) {
+    let title = if is_active {
+        format!("Playlist ({}) [ACTIVE]", app.playlists.len())
+    } else {
+        format!("Playlist ({})", app.playlists.len())
+    };
+    let playlist: Vec<ListItem> = app
+        .playlists
+        .iter()
+        .enumerate()
+        .map(|(i, playlist)| {
+            let is_selected = is_active && i == app.selected_playlist_index;
+            let content = vec![Line::from(vec![
+                Span::styled(
+                    format!("{} - ", playlist.name),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(
+                    format!(" {}", &playlist.song_count),
+                    Style::default().fg(Color::LightBlue),
+                ),
+                Span::styled(
+                    format!(" {}", &playlist.duration),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])];
+            let style = if is_selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(content).style(style)
+        })
+        .collect();
+    let playlists = List::new(playlist)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(border_style),
+        )
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">> ");
+    if is_active && !app.playlists.is_empty() {
+        if app.selected_playlist_index >= app.playlists.len() {
+            app.selected_playlist_index = app.playlists.len().saturating_sub(1);
+        }
+        app.playlist_state.select(Some(app.selected_playlist_index));
+    }
+    f.render_stateful_widget(playlists, area, &mut app.playlist_state);
 }
 fn draw_album_list_styled(
     f: &mut Frame,

@@ -1,4 +1,5 @@
-use crate::app::{Album, Artist, Track};
+use crate::app;
+use crate::app::{Album, Artist, Playlists, Track};
 use crate::config::Config;
 use anyhow::{Context, Ok, Result};
 use serde::Deserialize;
@@ -33,6 +34,56 @@ struct SubsonicArtistResponseInner<T> {
     artist: T,
 }
 
+#[derive(Deserialize, Debug)]
+struct SubsonicPlaylistsResponse {
+    #[serde(rename = "subsonic-response")]
+    subsonic_response: SubsonicPlaylistsResponseInner,
+}
+#[derive(Deserialize, Debug)]
+struct SubsonicPlaylistResponse {
+    #[serde(rename = "subsonic-response")]
+    subsonic_response: SubsonicPlaylistResponseInner,
+}
+#[derive(Deserialize, Debug)]
+struct SubsonicPlaylistsResponseInner {
+    playlists: PlaylistWrapper,
+}
+
+#[derive(Deserialize, Debug)]
+struct SubsonicPlaylistResponseInner {
+    playlist: Playlist,
+}
+
+#[derive(Deserialize, Debug)]
+struct PlaylistWrapper {
+    #[serde(default)]
+    playlist: Vec<PlaylistInfo>,
+}
+
+// #[derive(Deserialize, Debug)]
+// struct GetPlaylistResponse {
+//     // #[serde(flatten)]
+//     playlist: Playlist,
+// }
+//
+#[derive(Deserialize, Debug)]
+struct PlaylistInfo {
+    id: String,
+    name: String,
+    #[serde(rename = "songCount")]
+    song_count: i32,
+    duration: i64,
+    // #[serde(rename = "coverArt")]
+    // cover_art: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Playlist {
+    // id: String,
+    // name: String,
+    #[serde(default)]
+    entry: Vec<Song>,
+}
 #[derive(Deserialize)]
 struct SubsonicResponseInner<T> {
     #[serde(flatten)]
@@ -50,11 +101,6 @@ struct SubsonicResponseInnerEmpty {
     _open_subsonic: bool,
 }
 
-// #[derive(Deserialize)]
-// struct ArtistInfo {
-//     id: String,
-//     name: String,
-// }
 #[derive(Deserialize)]
 struct GetArtistsListResponse {
     // #[serde(rename = "albumList2")]
@@ -250,6 +296,60 @@ impl SubsonicClient {
         }
 
         Ok(artists)
+    }
+    pub async fn get_playlists(&self) -> Result<Vec<app::Playlists>> {
+        let mut url = Url::parse(&format!("{}/rest/getPlaylists", self.base_url))?;
+        let params = self.get_auth_params();
+        for (key, value) in params {
+            url.query_pairs_mut().append_pair(key, &value);
+        }
+        let mut playlists: Vec<app::Playlists> = Vec::new();
+        let response: SubsonicPlaylistsResponse = self.client.get(url).send().await?.json().await?;
+        println!("{:?}", response.subsonic_response.playlists.playlist);
+        for play in response.subsonic_response.playlists.playlist {
+            playlists.push(app::Playlists {
+                id: play.id,
+                song_count: play.song_count,
+                name: play.name,
+                duration: play.duration
+
+                // cover_art: play.cover_art
+            });
+        }
+        Ok(playlists)
+    }
+    pub async fn get_songs_from_playlist(&self, playlist: &Playlists) -> Result<Vec<Track>> {
+        let mut songs: Vec<Track> = Vec::new();
+        let mut url = Url::parse(&format!("{}/rest/getPlaylist", self.base_url))?;
+        let mut params = self.get_auth_params();
+        params.push(("id", playlist.id.clone()));
+        for (key, value) in params {
+            url.query_pairs_mut().append_pair(key, &value);
+        }
+        let response: SubsonicPlaylistResponse = self.client.get(url).send().await?.json().await?;
+        for song in response.subsonic_response.playlist.entry {
+            let mut cover_art = Url::parse(&format!("{}/rest/getCoverArt", self.base_url))?;
+            let mut cover_art_params = self.get_auth_params();
+            cover_art_params.push(("id",song.id.clone()));
+            for (k,v) in cover_art_params{
+                cover_art.query_pairs_mut().append_pair(k, &v);
+            }
+            log::debug!("Cover art: {:}",cover_art);
+            songs.push(Track {
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                album_artist: song.display_album_artist,
+                album: song.album,
+                cover_art: Some(cover_art.to_string()),
+                duration: song.duration.unwrap_or(0) * 1_000_000,
+                track_number: song.track_number,
+                play_count: song.play_count,
+                genres: song.genres.iter().map(|f| f.name.clone()).collect(),
+            });
+        }
+
+        Ok(songs)
     }
     pub async fn get_artist_albums(&self, artist: &Artist) -> Result<Vec<Album>> {
         let mut albums: Vec<Album> = Vec::new();

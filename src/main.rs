@@ -80,6 +80,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                     KeyCode::Char('1') => app.select_tab(app::ActiveTab::Songs),
                     KeyCode::Char('2') => app.select_tab(app::ActiveTab::Artists),
                     KeyCode::Char('3') => app.select_tab(app::ActiveTab::Albums),
+                    KeyCode::Char('4') => app.select_tab(app::ActiveTab::Playlist),
                     KeyCode::Char('s') => {
                         app.select_tab(app::ActiveTab::Search);
                         app.enter_search_mode();
