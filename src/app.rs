@@ -11,7 +11,7 @@ use crossterm::{
     terminal::disable_raw_mode,
 };
 use futures::future;
-use image::DynamicImage;
+use image::{DynamicImage};
 use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
 use notify_rust::{Hint, Notification};
 use ratatui::widgets::ListState;
@@ -35,13 +35,17 @@ impl TerminalGuard {
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture,
-        );
-        let _ = io::stdout().flush();
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |x| {
+            let _ = disable_raw_mode();
+            let _ = crossterm::execute!(
+                io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture,
+            );
+            let _ = io::stdout().flush();
+            original_hook(x)
+        }));
     }
 }
 pub struct App {
@@ -52,10 +56,12 @@ pub struct App {
     pub tracks: Vec<Track>,
     pub albums: Vec<Album>,
     pub artists: Vec<Artist>,
+    pub playlists: Vec<Playlists>,
     pub selected_queue_index: usize,
     pub selected_index: usize,
     pub selected_artist_index: usize,
     pub selected_album_index: usize,
+    pub selected_playlist_index: usize,
     pub is_playing: bool,
     pub current_track: Option<Track>,
     pub current_volume: f64,
@@ -69,6 +75,7 @@ pub struct App {
     pub list_state: ListState,
     pub artist_state: ListState,
     pub album_state: ListState,
+    pub playlist_state: ListState,
     pub search_state: ListState,
     pub active_tab: ActiveTab,
     pub active_section: ActiveSection,
@@ -118,6 +125,19 @@ pub struct Artist {
     pub name: String,
     pub album_count: i32,
 }
+pub struct Playlists {
+    pub id: String,
+    pub name: String,
+    pub song_count: i32,
+    pub duration: i64
+}
+// pub struct Playlist {
+//     pub id: String,
+//     pub title: String,
+//     pub song_count: i32,
+//     pub cover_art: String,
+//     // pub songs: Vec<Track>,
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveSection {
@@ -126,7 +146,7 @@ pub enum ActiveSection {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveTab {
-    // Queue,
+    Playlist,
     Albums,
     Artists,
     Songs,
@@ -160,11 +180,13 @@ impl App {
             tracks: Vec::new(),
             artists: Vec::new(),
             albums: Vec::new(),
+            playlists: Vec::new(),
             metadata: Metadata::default(),
             selected_queue_index: 0,
             selected_index: 0,
             selected_artist_index: 0,
             selected_album_index: 0,
+            selected_playlist_index: 0,
             playing_index: 0,
             is_playing: false,
             current_track: None,
@@ -175,6 +197,7 @@ impl App {
             artist_state: ListState::default(),
             album_state: ListState::default(),
             search_state: ListState::default(),
+            playlist_state: ListState::default(),
             mpris: mprisserver,
             command_receiver: rx,
             active_tab: ActiveTab::Songs,
@@ -279,31 +302,38 @@ impl App {
     }
     pub async fn load_cover_art_for_track(&mut self, track: &Track) {
         self.cover_art_protocol = None;
-        if let Some(url) = &track.cover_art
-            && !url.is_empty()
-        {
-            match self.fetch_cover_art(url).await {
-                Ok(img) => {
-                    if let Ok(picker) = Picker::from_query_stdio() {
-                        self.cover_art_protocol = Some(picker.new_resize_protocol(img));
-                    }
+
+        let url = match &track.cover_art {
+            Some(url) if !url.is_empty() => url,
+            _ => return,
+        };
+        match self.fetch_cover_art(url).await {
+            Ok(img) => match Picker::from_query_stdio() {
+                Ok(picker) => {
+                    self.cover_art_protocol = Some(picker.new_resize_protocol(img));
                 }
                 Err(e) => {
-                    eprintln!("failed to load cover art: {}", e);
+                    log::debug!("Failed to create image picker: {}", e);
                 }
+            },
+
+            Err(e) => {
+                eprintln!("failed to load cover art: {}", e);
             }
         }
     }
     async fn fetch_and_cache_image(&self, url: &str, track_id: &str) -> Result<String> {
-        println!("Currently fetching");
-        let img = self.fetch_cover_art(url).await.unwrap();
+        log::debug!("Currently fetching cover are for track_id: {}", track_id);
+        let img = self
+            .fetch_cover_art(url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch cover art: {}", e))?;
         let mut path = std::env::temp_dir();
         path.push("sonicrust");
         std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
         path.push(format!("cover_{}.jpg", track_id));
         img.save(&path).map_err(|e| anyhow::anyhow!(e))?;
 
-        println!("Path {}", path.to_string_lossy());
         Ok(path.to_string_lossy().to_string())
     }
 
@@ -314,11 +344,15 @@ impl App {
         let url = url.to_string();
         tokio::task::spawn_blocking(move || {
             let res = reqwest::blocking::get(&url)?;
+            if !res.status().is_success() {
+                return Err(format!("HTTP error: {}", res.status()).into());
+            }
             let bytes = res.bytes()?;
-            let img = image::load(
-                Cursor::new(bytes),
-                image::ImageFormat::from_path(&url).unwrap_or(image::ImageFormat::Jpeg),
-            )?;
+            if bytes.is_empty() {
+                return Err("Empty response when fetching cover art".into());
+            }
+            let format = image::guess_format(&bytes).unwrap_or(image::ImageFormat::Jpeg);
+            let img = image::load(Cursor::new(bytes), format)?;
             Ok(img)
         })
         .await?
@@ -369,6 +403,7 @@ impl App {
         self.tracks = self.subsonic_client.get_all_songs().await?;
         self.artists = self.subsonic_client.get_all_artists().await?;
         self.albums = self.subsonic_client.get_all_albums().await?;
+        self.playlists = self.subsonic_client.get_playlists().await?;
         Ok(())
     }
     pub fn find_selected(&self) -> usize {
@@ -389,6 +424,7 @@ impl App {
                     }
                 }
                 ActiveTab::Artists => self.selected_queue_index,
+                ActiveTab::Playlist => self.selected_queue_index,
                 ActiveTab::Songs => {
                     if !self.queue.is_empty() {
                         self.selected_queue_index
@@ -483,6 +519,20 @@ impl App {
                     ActiveTab::Albums => {
                         if let Some(album) = self.albums.get(self.selected_album_index) {
                             let songs = self.subsonic_client.get_songs_in_album(album).await?;
+                            if !songs.is_empty() {
+                                self.queue = songs;
+                                self.selected_queue_index = 0;
+                                track_to_play = self.queue.first().cloned();
+                                self.playing_index = self.selected_queue_index;
+                            }
+                        }
+                    }
+                    ActiveTab::Playlist => {
+                        if let Some(playlist) = self.playlists.get(self.selected_playlist_index) {
+                            let songs = self
+                                .subsonic_client
+                                .get_songs_from_playlist(playlist)
+                                .await?;
                             if !songs.is_empty() {
                                 self.queue = songs;
                                 self.selected_queue_index = 0;
@@ -644,9 +694,15 @@ impl App {
             .finalize();
         if let Some(url) = &track.cover_art
             && !url.is_empty()
-            && let Ok(path) = self.fetch_and_cache_image(url, &track.id).await
         {
-            notif.hint(Hint::ImagePath(path));
+            match self.fetch_and_cache_image(url, &track.id).await {
+                Ok(path) => {
+                    notif.hint(Hint::ImagePath(path));
+                }
+                Err(e) => {
+                    log::debug!("Could not load cover art for notification: {}", e);
+                }
+            }
         }
         let _ = notif.show();
         Ok(())
@@ -759,6 +815,7 @@ impl App {
         match self.active_tab {
             // ActiveTab::Queue => self.queue_state.select(None),
             ActiveTab::Songs => self.list_state.select(None),
+            ActiveTab::Playlist => self.playlist_state.select(None),
             ActiveTab::Artists => self.artist_state.select(None),
             ActiveTab::Albums => self.album_state.select(None),
             ActiveTab::Search => {
@@ -771,9 +828,10 @@ impl App {
 
         // Initialize new tab state
         match tab {
-            // ActiveTab::Queue if !self.queue.is_empty() => {
-            //     self.queue_state.select(Some(self.selected_queue_index));
-            // }
+            ActiveTab::Playlist if !self.playlists.is_empty() => {
+                self.playlist_state
+                    .select(Some(self.selected_playlist_index));
+            }
             ActiveTab::Songs if !self.tracks.is_empty() => {
                 self.list_state.select(Some(self.selected_index));
             }
@@ -808,6 +866,9 @@ impl App {
                 match self.active_tab {
                     ActiveTab::Songs => {
                         self.artist_state.select(Some(self.selected_index));
+                    }
+                    ActiveTab::Playlist => {
+                        self.playlist_state.select(Some(self.selected_index));
                     }
                     ActiveTab::Artists => {
                         self.album_state.select(Some(self.selected_artist_index));
@@ -852,6 +913,20 @@ impl App {
                         self.search_state.select(Some(self.selected_search_index));
                     } else {
                         self.search_state.select(None);
+                    }
+                }
+                ActiveTab::Playlist => {
+                    if !self.playlists.is_empty() {
+                        let i = if let Some(selected) = self.playlist_state.selected() {
+                            (selected + 1) % self.playlists.len()
+                        } else {
+                            0
+                        };
+                        self.selected_playlist_index = i;
+                        self.playlist_state
+                            .select(Some(self.selected_playlist_index));
+                    } else {
+                        self.playlist_state.select(None);
                     }
                 }
                 ActiveTab::Songs => {
@@ -917,6 +992,24 @@ impl App {
             }
             ActiveSection::Others => {
                 match self.active_tab {
+                    ActiveTab::Playlist => {
+                        if !self.playlists.is_empty() {
+                            let i = if let Some(selected) = self.playlist_state.selected() {
+                                if selected == 0 {
+                                    self.playlists.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.playlists.len().saturating_sub(1)
+                            };
+                            self.selected_playlist_index = i;
+                            self.playlist_state
+                                .select(Some(self.selected_playlist_index));
+                        } else {
+                            self.playlist_state.select(None);
+                        }
+                    }
                     ActiveTab::Search => {
                         if !self.search_results.is_empty() {
                             let i = if let Some(selected) = self.search_state.selected() {
