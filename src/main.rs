@@ -4,6 +4,7 @@ mod mpris_handler;
 mod player;
 mod search;
 mod subsonic;
+mod theme;
 mod ui;
 
 use anyhow::Result;

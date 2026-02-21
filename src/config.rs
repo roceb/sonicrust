@@ -1,3 +1,4 @@
+use crate::theme::Theme;
 use anyhow::Result;
 use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -10,24 +11,10 @@ pub struct Config {
     pub username: String,
     pub password: String,
     pub secret: String,
+    #[serde(default)]
     pub theme: Theme,
+    #[serde(default)]
     pub search: SearchConfig,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Theme {
-    pub bg: String,
-    pub fg: String,
-    pub bold: bool,
-}
-impl Default for Theme {
-    fn default() -> Self {
-        Self {
-            bg: "DarkGrey".to_string(),
-            fg: "".to_string(),
-            bold: true,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

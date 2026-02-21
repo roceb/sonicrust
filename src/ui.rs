@@ -1,4 +1,7 @@
-use crate::app::{ActiveSection, ActiveTab, App, InputMode, Track};
+use crate::{
+    app::{ActiveSection, ActiveTab, App, InputMode, Track},
+    theme::ResolvedTheme,
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -6,7 +9,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Tabs},
 };
-use ratatui_image::{StatefulImage};
+use ratatui_image::StatefulImage;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let main_chunks = Layout::default()
@@ -19,20 +22,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Length(3),
         ])
         .split(f.area());
-    let _theme = app.config.theme.clone();
-    draw_playback_header(f, app, main_chunks[0]);
-    draw_tabs(f, app, main_chunks[1]);
-    draw_split_content(f, app, main_chunks[2]);
+    let theme = app.config.theme.resolve();
+    draw_playback_header(f, app, main_chunks[0], &theme);
+    draw_tabs(f, app, main_chunks[1], &theme);
+    draw_split_content(f, app, main_chunks[2], &theme);
     // draw_track_list(f, "Queue", app, main_chunks[3]);
-    draw_player_controls(f, app, main_chunks[3]);
+    draw_player_controls(f, app, main_chunks[3], &theme);
 }
 
-fn draw_playback_header(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_playback_header(f: &mut Frame, app: &mut App, area: Rect, theme: &ResolvedTheme) {
     // TODO:Add custom styling form the config file
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(theme.border_inactive));
     f.render_widget(block.clone(), area);
     let inner_area = block.inner(area);
     // let inner_area = Rect {
@@ -57,23 +60,23 @@ fn draw_playback_header(f: &mut Frame, app: &mut App, area: Rect) {
             ])
             .split(header_chunks[0]);
         draw_cover_art(f, app, track, player_info_chunks[0]);
-        draw_track_info(f, app, track, player_info_chunks[1]);
-        draw_progress_bar(f, app, track, header_chunks[1]);
+        draw_track_info(f, app, track, player_info_chunks[1], theme);
+        draw_progress_bar(f, app, track, header_chunks[1], theme);
     } else {
         let placeholder = Paragraph::new(vec![
             Line::from(""),
             Line::from(vec![
-                Span::styled("♪ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("♪ ", Style::default().fg(theme.muted_color)),
                 Span::styled(
                     "No track playing",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme.muted_color)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]),
             Line::from(vec![Span::styled(
                 "Select a track and press Enter to play",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted_color),
             )]),
         ])
         .alignment(Alignment::Center);
@@ -92,10 +95,9 @@ fn draw_cover_art(f: &mut Frame, app: &mut App, track: &Track, area: Rect) {
         .map(|url| !url.is_empty())
         .unwrap_or(false);
     if has_valid_cover && let Some(ref mut protocol) = app.cover_art_protocol {
-            let image_widget = StatefulImage::default();
-            f.render_stateful_widget(image_widget, area, protocol);
-            return;
-
+        let image_widget = StatefulImage::default();
+        f.render_stateful_widget(image_widget, area, protocol);
+        return;
     }
     draw_cover_placeholder(f, area);
 }
@@ -110,39 +112,40 @@ fn draw_cover_placeholder(f: &mut Frame, area: Rect) {
         );
     f.render_widget(placeholder, area);
 }
-fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect) {
+fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect, theme: &ResolvedTheme) {
+    let bold_mod = if theme.bold {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    };
     let status_icon = if app.is_playing { "▶" } else { "⏸" };
     let status_color = if app.is_playing {
-        Color::LightGreen
+        theme.playing_color
     } else {
         Color::LightYellow
     };
     let repeat_indicator = if app.on_repeat {
-        Span::styled("repeat: on", Style::default().fg(Color::DarkGray))
+        Span::styled("repeat: on", Style::default().fg(theme.accent))
     } else {
-        Span::styled("repeat: off", Style::default().fg(Color::DarkGray))
+        Span::styled("repeat: off", Style::default().fg(theme.muted_color))
     };
     let shuffle_indicator = if app._on_shuffle {
-        Span::styled("shuffle: on", Style::default().fg(Color::DarkGray))
+        Span::styled("shuffle: on", Style::default().fg(theme.accent))
     } else {
-        Span::styled("shuffle: off", Style::default().fg(Color::DarkGray))
+        Span::styled("shuffle: off", Style::default().fg(theme.muted_color))
     };
     let info_lines = vec![
         Line::from(vec![
             Span::styled(
                 format!("{} ", status_icon),
-                Style::default()
-                    .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(status_color).add_modifier(bold_mod),
             ),
             Span::styled(
                 &track.title,
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.fg).add_modifier(bold_mod),
             ),
-            Span::styled(" — ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&track.artist, Style::default().fg(Color::Cyan)),
+            Span::styled(" — ", Style::default().fg(theme.muted_color)),
+            Span::styled(&track.artist, Style::default().fg(theme.artist_color)),
         ]),
         Line::from(vec![
             Span::styled("  ", Style::default()), // Indent to align with title
@@ -150,7 +153,7 @@ fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect) {
             Span::styled(
                 &track.album,
                 Style::default()
-                    .fg(Color::Gray)
+                    .fg(theme.album_color)
                     .add_modifier(Modifier::ITALIC),
             ),
         ]),
@@ -160,7 +163,7 @@ fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect) {
             // Span::styled(volume_indicator, Style::default().fg(volume_color)),
             Span::styled(
                 format!("Volume {:.0}%  ", app.current_volume * 100.0),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme.fg),
             ),
             repeat_indicator,
             Span::styled("  ", Style::default()), // Indent
@@ -170,7 +173,7 @@ fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect) {
     let track_info = Paragraph::new(info_lines);
     f.render_widget(track_info, area);
 }
-fn draw_progress_bar(f: &mut Frame, app: &App, track: &Track, area: Rect) {
+fn draw_progress_bar(f: &mut Frame, app: &App, track: &Track, area: Rect, theme: &ResolvedTheme) {
     let current_pos = if let Ok(state) = app.shared_state.read() {
         state.position.as_secs()
     } else {
@@ -190,15 +193,15 @@ fn draw_progress_bar(f: &mut Frame, app: &App, track: &Track, area: Rect) {
     let gauge = Gauge::default()
         .gauge_style(
             Style::default()
-                .fg(Color::LightGreen)
-                .bg(Color::DarkGray)
+                .fg(theme.playing_color)
+                .bg(theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .ratio(progress_ratio)
         .label(Span::styled(
             time_display,
             Style::default()
-                .fg(Color::LightYellow)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(gauge, area);
@@ -208,7 +211,7 @@ fn format_duration(sec: i64) -> String {
     let secs = sec % 60;
     format!("{}:{:02}", mins, secs)
 }
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+fn draw_tabs(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let tab_titles: Vec<Line> = vec![
         Line::from("Songs"),
         Line::from("Artist"),
@@ -228,17 +231,17 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT | Borders::BOTTOM),
         )
         .select(selected_tab_index)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(theme.muted_color))
         .highlight_style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray),
+                .bg(theme.highlight_bg),
         )
         .divider(Span::raw(" | "));
     f.render_widget(tabs, area);
 }
-fn draw_split_content(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_split_content(f: &mut Frame, app: &mut App, area: Rect, theme: &ResolvedTheme) {
     let content_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -247,31 +250,43 @@ fn draw_split_content(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(area);
     let library_active = app.active_section == ActiveSection::Others;
-    draw_content_area_with_border(f, app, content_chunks[0], library_active);
+    draw_content_area_with_border(f, app, content_chunks[0], library_active, theme);
     let queue_active = app.active_section == ActiveSection::Queue;
-    draw_queue_with_border(f, app, content_chunks[1], queue_active);
+    draw_queue_with_border(f, app, content_chunks[1], queue_active, theme);
 }
 
-fn draw_content_area_with_border(f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
+fn draw_content_area_with_border(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    is_active: bool,
+    theme: &ResolvedTheme,
+) {
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.border_active)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.border_inactive)
     };
     match app.active_tab {
-        ActiveTab::Playlist => draw_playlist_styled(f, app, area, border_style, is_active),
-        ActiveTab::Albums => draw_album_list_styled(f, app, area, border_style, is_active),
-        ActiveTab::Artists => draw_artist_list_styled(f, app, area, border_style, is_active),
-        ActiveTab::Songs => draw_song_list_styled(f, app, area, border_style, is_active),
-        ActiveTab::Search => draw_search_tab_styled(f, app, area, border_style, is_active),
+        ActiveTab::Playlist => draw_playlist_styled(f, app, area, border_style, is_active, theme),
+        ActiveTab::Albums => draw_album_list_styled(f, app, area, border_style, is_active, theme),
+        ActiveTab::Artists => draw_artist_list_styled(f, app, area, border_style, is_active, theme),
+        ActiveTab::Songs => draw_song_list_styled(f, app, area, border_style, is_active, theme),
+        ActiveTab::Search => draw_search_tab_styled(f, app, area, border_style, is_active, theme),
     }
 }
 
-fn draw_queue_with_border(f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
+fn draw_queue_with_border(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    is_active: bool,
+    theme: &ResolvedTheme,
+) {
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.border_active)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.border_inactive)
     };
     let title = if is_active {
         format!("Queue ({}) [ACTIVE]", app.queue.len())
@@ -281,7 +296,7 @@ fn draw_queue_with_border(f: &mut Frame, app: &mut App, area: Rect, is_active: b
     if app.queue.is_empty() {
         let empty_message =
             Paragraph::new("No tracks in queue\n Select a track and press Enter to add")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(theme.muted_color))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
@@ -308,35 +323,36 @@ fn draw_queue_with_border(f: &mut Frame, app: &mut App, area: Rect, is_active: b
                 Span::styled(
                     playing_indicator,
                     Style::default().fg(if is_playing {
-                        Color::LightGreen
+                        theme.playing_color
                     } else {
-                        Color::DarkGray
+                        theme.muted_color
                     }),
                 ),
                 Span::styled(
                     format!("{:03}. ", i + 1),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted_color),
                 ),
                 Span::styled(
                     &track.title,
                     Style::default().fg(if is_playing {
-                        Color::LightGreen
+                        theme.playing_color
                     } else {
-                        Color::White
+                        theme.fg
                     }),
                 ),
                 Span::styled(
                     format!(" - {}", track.artist),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.artist_color),
                 ),
             ])];
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
                     .add_modifier(Modifier::BOLD)
             } else if is_playing {
                 Style::default()
-                    .fg(Color::LightGreen)
+                    .fg(theme.playing_color)
                     .add_modifier(Modifier::ITALIC)
             } else {
                 Style::default()
@@ -354,7 +370,8 @@ fn draw_queue_with_border(f: &mut Frame, app: &mut App, area: Rect, is_active: b
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
@@ -373,6 +390,7 @@ fn draw_song_list_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     let title = if is_active {
         format!("Songs ({}) [ACTIVE]", app.tracks.len())
@@ -388,17 +406,18 @@ fn draw_song_list_styled(
             let content = vec![Line::from(vec![
                 Span::styled(
                     format!("{:03}. {} - ", i + 1, track.artist),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.artist_color),
                 ),
-                Span::raw(&track.title),
+                Span::styled(&track.title, Style::default().fg(theme.fg)),
                 Span::styled(
                     format!(" ({}) ", track.album),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted_color),
                 ),
             ])];
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -413,7 +432,11 @@ fn draw_song_list_styled(
                 .border_style(border_style)
                 .title(title),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg),
+        )
         .highlight_symbol(">> ");
     if is_active && !app.tracks.is_empty() {
         if app.selected_index >= app.tracks.len() {
@@ -430,6 +453,7 @@ fn draw_search_tab_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     // Split the search area into search input and results
     let chunks = Layout::default()
@@ -440,19 +464,19 @@ fn draw_search_tab_styled(
         ])
         .split(area);
 
-    draw_search_input(f, app, chunks[0]);
-    draw_search_results_styled(f, app, chunks[1], border_style, is_active);
+    draw_search_input(f, app, chunks[0], theme);
+    draw_search_results_styled(f, app, chunks[1], border_style, is_active, theme);
 }
-fn draw_search_input(f: &mut Frame, app: &App, area: Rect) {
+fn draw_search_input(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let (border_style, _cursor_style) = if app.input_mode == InputMode::Search {
         (
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.accent),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.accent)
                 .add_modifier(Modifier::RAPID_BLINK),
         )
     } else {
-        (Style::default().fg(Color::DarkGray), Style::default())
+        (Style::default().fg(theme.border_inactive), Style::default())
     };
 
     let search_icon = if app.is_searching { "⏳" } else { "🔍" };
@@ -471,7 +495,7 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let search_input = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(theme.fg))
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -491,6 +515,7 @@ fn draw_search_results_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     let title = if is_active {
         format!("Results ({}) [ACTIVE]", app.search_results.len())
@@ -507,7 +532,7 @@ fn draw_search_results_styled(
         };
 
         let empty_message = Paragraph::new(message)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.muted_color))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title("Results (0)"));
         f.render_widget(empty_message, area);
@@ -521,21 +546,25 @@ fn draw_search_results_styled(
         .map(|(i, track)| {
             let is_selected = is_active && i == app.selected_search_index;
             let content = vec![Line::from(vec![
-                Span::styled(format!("{}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}. ", i + 1),
+                    Style::default().fg(theme.muted_color),
+                ),
                 Span::styled(
                     format!("{} - ", track.artist),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.artist_color),
                 ),
-                Span::styled(&track.title, Style::default().fg(Color::White)),
+                Span::styled(&track.title, Style::default().fg(theme.fg)),
                 Span::styled(
                     format!(" [{}]", track.album),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.album_color),
                 ),
             ])];
 
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -544,11 +573,6 @@ fn draw_search_results_styled(
             ListItem::new(content).style(style)
         })
         .collect();
-
-    // let results_title = format!(
-    //     "Results ({}) - Enter=Play | a=Add to Queue | A=Add All | Esc=Exit Search",
-    //     app.search_results.len()
-    // );
 
     let results_list = List::new(results)
         .block(
@@ -559,7 +583,8 @@ fn draw_search_results_styled(
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
@@ -580,6 +605,7 @@ fn draw_playlist_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     let title = if is_active {
         format!("Playlist ({}) [ACTIVE]", app.playlists.len())
@@ -595,20 +621,20 @@ fn draw_playlist_styled(
             let content = vec![Line::from(vec![
                 Span::styled(
                     format!("{} - ", playlist.name),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.fg),
                 ),
                 Span::styled(
                     format!(" {}", &playlist.song_count),
-                    Style::default().fg(Color::LightBlue),
+                    Style::default().fg(theme.accent),
                 ),
                 Span::styled(
                     format!(" {}", &playlist.duration),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted_color),
                 ),
             ])];
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.muted_color)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -623,7 +649,11 @@ fn draw_playlist_styled(
                 .title(title)
                 .border_style(border_style),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg),
+        )
         .highlight_symbol(">> ");
     if is_active && !app.playlists.is_empty() {
         if app.selected_playlist_index >= app.playlists.len() {
@@ -639,6 +669,7 @@ fn draw_album_list_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     let title = if is_active {
         format!("Albums ({}) [ACTIVE]", app.albums.len())
@@ -654,13 +685,13 @@ fn draw_album_list_styled(
             let content = vec![Line::from(vec![
                 Span::styled(
                     format!("{} - ", album.artist),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.artist_color),
                 ),
                 Span::raw(&album.name),
             ])];
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.muted_color)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -675,7 +706,11 @@ fn draw_album_list_styled(
                 .title(title)
                 .border_style(border_style),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg),
+        )
         .highlight_symbol(">> ");
     if is_active && !app.albums.is_empty() {
         if app.selected_album_index >= app.albums.len() {
@@ -691,6 +726,7 @@ fn draw_artist_list_styled(
     area: Rect,
     border_style: Style,
     is_active: bool,
+    theme: &ResolvedTheme,
 ) {
     let title = if is_active {
         format!("Artists ({}) [ACTIVE]", app.artists.len())
@@ -706,13 +742,13 @@ fn draw_artist_list_styled(
             let content = vec![Line::from(vec![
                 Span::styled(
                     format!("{} - ", artist.name),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.artist_color),
                 ),
                 Span::raw(artist.album_count.to_string()),
             ])];
             let style = if is_selected {
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.muted_color)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -727,7 +763,11 @@ fn draw_artist_list_styled(
                 .title(title)
                 .border_style(border_style),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg),
+        )
         .highlight_symbol(">> ");
     if is_active && !app.artists.is_empty() {
         if app.selected_artist_index >= app.artists.len() {
@@ -738,7 +778,7 @@ fn draw_artist_list_styled(
     // f.render_widget(track_list, area);
     f.render_stateful_widget(artist_list, area, &mut app.artist_state);
 }
-fn draw_player_controls(f: &mut Frame, app: &App, area: Rect) {
+fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let section_indicator = match app.active_section {
         ActiveSection::Queue => "[Queue]",
         ActiveSection::Others => "[Library]",
@@ -748,7 +788,7 @@ fn draw_player_controls(f: &mut Frame, app: &App, area: Rect) {
         section_indicator
     );
     let controls_widget = Paragraph::new(controls)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(theme.fg))
         .block(Block::default().borders(Borders::ALL).title("Controls"));
     f.render_widget(controls_widget, area);
 }
