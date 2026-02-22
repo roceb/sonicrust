@@ -64,6 +64,8 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
         {
             if app.input_mode == InputMode::Search {
                 app.handle_search_input(key).await?;
+            } else if app.input_mode == InputMode::InlineSearch {
+                app.handle_inline_search_input(key).await?;
             } else {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
@@ -82,9 +84,15 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                     KeyCode::Char('2') => app.select_tab(app::ActiveTab::Artists),
                     KeyCode::Char('3') => app.select_tab(app::ActiveTab::Albums),
                     KeyCode::Char('4') => app.select_tab(app::ActiveTab::Playlist),
+                    KeyCode::Char('5') => app.select_tab(app::ActiveTab::Favorites),
                     KeyCode::Char('s') => {
                         app.select_tab(app::ActiveTab::Search);
                         app.enter_search_mode();
+                    }
+                    KeyCode::Char('/') => {
+                        if app.active_tab != app::ActiveTab::Search {
+                            app.start_inline_search();
+                        }
                     }
                     KeyCode::Char('n') => app.play_next().await?,
                     KeyCode::Char('p') => app.play_previous().await?,

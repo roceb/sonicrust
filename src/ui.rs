@@ -211,19 +211,27 @@ fn format_duration(sec: i64) -> String {
     let secs = sec % 60;
     format!("{}:{:02}", mins, secs)
 }
+fn format_duration_hour(sec: i64) -> String {
+    let hours = sec / 3600;
+    let mins = (sec % 3600) / 60;
+    let sec = sec % 60;
+    format!("{}:{}:{:02}", hours, mins, sec)
+}
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let tab_titles: Vec<Line> = vec![
         Line::from("Songs"),
         Line::from("Artist"),
         Line::from("Album"),
         Line::from("Playlist"),
+        Line::from("Favorites"),
     ];
     let selected_tab_index = match app.active_tab {
         ActiveTab::Songs => 0,
         ActiveTab::Artists => 1,
         ActiveTab::Albums => 2,
-        ActiveTab::Search => 3,
-        ActiveTab::Playlist => 4,
+        ActiveTab::Playlist => 3,
+        ActiveTab::Favorites => 4,
+        ActiveTab::Search => 5,
     };
     let tabs = Tabs::new(tab_titles)
         .block(
@@ -272,6 +280,9 @@ fn draw_content_area_with_border(
         ActiveTab::Albums => draw_album_list_styled(f, app, area, border_style, is_active, theme),
         ActiveTab::Artists => draw_artist_list_styled(f, app, area, border_style, is_active, theme),
         ActiveTab::Songs => draw_song_list_styled(f, app, area, border_style, is_active, theme),
+        ActiveTab::Favorites => {
+            draw_favorite_list_styled(f, app, area, border_style, is_active, theme)
+        }
         ActiveTab::Search => draw_search_tab_styled(f, app, area, border_style, is_active, theme),
     }
 }
@@ -384,6 +395,68 @@ fn draw_queue_with_border(
     f.render_stateful_widget(queue_list, area, &mut app.queue_state);
 }
 
+fn draw_favorite_list_styled(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    border_style: Style,
+    is_active: bool,
+    theme: &ResolvedTheme,
+) {
+    let title = if is_active {
+        format!("Favorites ({}) [ACTIVE]", app.favorites.len())
+    } else {
+        format!("Favorites ({})", app.favorites.len())
+    };
+    let tracks: Vec<ListItem> = app
+        .favorites
+        .iter()
+        .enumerate()
+        .map(|(i, track)| {
+            let is_selected = is_active && i == app.selected_favorite_index;
+            let content = vec![Line::from(vec![
+                Span::styled(
+                    format!("{:03}. {} - ", i + 1, track.artist),
+                    Style::default().fg(theme.artist_color),
+                ),
+                Span::styled(&track.title, Style::default().fg(theme.fg)),
+                Span::styled(
+                    format!(" ({}) ", track.album),
+                    Style::default().fg(theme.muted_color),
+                ),
+            ])];
+            let style = if is_selected {
+                Style::default()
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(content).style(style)
+        })
+        .collect();
+    let track_list = List::new(tracks)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg),
+        )
+        .highlight_symbol(">> ");
+    if is_active && !app.favorites.is_empty() {
+        if app.selected_favorite_index >= app.favorites.len() {
+            app.selected_favorite_index = app.favorites.len().saturating_sub(1);
+        }
+        app.favorite_state.select(Some(app.selected_favorite_index));
+    }
+    f.render_stateful_widget(track_list, area, &mut app.favorite_state);
+}
 fn draw_song_list_styled(
     f: &mut Frame,
     app: &mut App,
@@ -492,6 +565,7 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme
     let mode_indicator = match app.input_mode {
         InputMode::Search => " [SEARCH MODE - Press Esc to exit] ",
         InputMode::Normal => " [Press 's' to search] ",
+        InputMode::InlineSearch => "",
     };
 
     let search_input = Paragraph::new(input_text)
@@ -628,7 +702,7 @@ fn draw_playlist_styled(
                     Style::default().fg(theme.accent),
                 ),
                 Span::styled(
-                    format!(" {}", &playlist.duration),
+                    format!(" {}", format_duration_hour(playlist.duration)),
                     Style::default().fg(theme.muted_color),
                 ),
             ])];
@@ -783,12 +857,36 @@ fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTh
         ActiveSection::Queue => "[Queue]",
         ActiveSection::Others => "[Library]",
     };
-    let controls = format!(
-        "{} Space=Play/Pause ↑/↓=Navigate Enter=Play Tab=Switch Section 1-4=Tabs q=Quit ←/→=Seek +/-=Volume",
-        section_indicator
-    );
+    let controls = if app.input_mode == InputMode::InlineSearch {
+        format!("/ {}█  [Enter/Esc to exit inline search]", app.search_query)
+    } else {
+        format!(
+            "{} Space=Play/Pause ↑/↓=Navigate Enter=Play Tab=Switch Section 1-4=Tabs q=Quit ←/→=Seek +/-=Volume",
+            section_indicator
+        )
+    };
+    let border_style = if app.input_mode == InputMode::InlineSearch {
+        Style::default().fg(theme.accent)
+    } else {
+        Style::default()
+    };
     let controls_widget = Paragraph::new(controls)
-        .style(Style::default().fg(theme.fg))
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
+        .style(
+            Style::default().fg(if app.input_mode == InputMode::InlineSearch {
+                theme.accent
+            } else {
+                theme.fg
+            }),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(if app.input_mode == InputMode::InlineSearch {
+                    "Find"
+                } else {
+                    "Controls"
+                }),
+        );
     f.render_widget(controls_widget, area);
 }

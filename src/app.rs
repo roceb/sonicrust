@@ -53,6 +53,7 @@ pub struct App {
     pub subsonic_client: Arc<SubsonicClient>,
     pub player: Rc<Mutex<Player>>,
     pub queue: Vec<Track>,
+    pub favorites: Vec<Track>,
     pub tracks: Vec<Track>,
     pub albums: Vec<Album>,
     pub artists: Vec<Artist>,
@@ -62,6 +63,7 @@ pub struct App {
     pub selected_artist_index: usize,
     pub selected_album_index: usize,
     pub selected_playlist_index: usize,
+    pub selected_favorite_index: usize,
     pub is_playing: bool,
     pub current_track: Option<Track>,
     pub current_volume: f64,
@@ -77,6 +79,7 @@ pub struct App {
     pub album_state: ListState,
     pub playlist_state: ListState,
     pub search_state: ListState,
+    pub favorite_state: ListState,
     pub active_tab: ActiveTab,
     pub active_section: ActiveSection,
     // Search fields
@@ -97,6 +100,7 @@ pub struct App {
 pub enum InputMode {
     Normal,
     Search,
+    InlineSearch, // search in current tab
 }
 #[derive(Clone, Debug)]
 pub struct Track {
@@ -143,6 +147,7 @@ pub enum ActiveTab {
     Artists,
     Songs,
     Search,
+    Favorites,
 }
 impl App {
     pub async fn new() -> Result<Self> {
@@ -201,12 +206,14 @@ impl App {
             artists: Vec::new(),
             albums: Vec::new(),
             playlists: Vec::new(),
+            favorites: Vec::new(),
             metadata: Metadata::default(),
             selected_queue_index: 0,
             selected_index: 0,
             selected_artist_index: 0,
             selected_album_index: 0,
             selected_playlist_index: 0,
+            selected_favorite_index: 0,
             playing_index: 0,
             is_playing: false,
             current_track: None,
@@ -218,6 +225,7 @@ impl App {
             album_state: ListState::default(),
             search_state: ListState::default(),
             playlist_state: ListState::default(),
+            favorite_state: ListState::default(),
             mpris: mprisserver,
             command_receiver: rx,
             active_tab: ActiveTab::Songs,
@@ -229,7 +237,7 @@ impl App {
             search_engine,
             is_searching: false,
             on_repeat: false,
-            _on_shuffle: true,
+            _on_shuffle: false,
             cover_art_protocol: None,
         };
 
@@ -266,6 +274,109 @@ impl App {
                 Property::CanGoPrevious(can_prev),
             ])
             .await;
+    }
+    pub fn start_inline_search(&mut self) {
+        self.input_mode = InputMode::InlineSearch;
+        self.search_query.clear();
+    }
+    pub fn exit_inline_search(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.search_query.clear();
+    }
+    pub fn inline_search_input(&mut self, c: char) {
+        if self.input_mode == InputMode::InlineSearch {
+            self.search_query.push(c);
+            self.jump_to_inline_match();
+        }
+    }
+    pub fn inline_search_backspace(&mut self) {
+        if self.input_mode == InputMode::InlineSearch {
+            self.search_query.pop();
+            self.jump_to_inline_match();
+        }
+    }
+
+    pub fn jump_to_inline_match(&mut self) {
+        if self.search_query.is_empty() {
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        match self.active_section {
+            ActiveSection::Queue => {
+                if let Some(idx) = self.queue.iter().position(|t| {
+                    t.title.to_lowercase().contains(&query)
+                        || t.artist.to_lowercase().contains(&query)
+                }) {
+                    self.selected_queue_index = idx;
+                    self.queue_state.select(Some(idx));
+                }
+            }
+            ActiveSection::Others => match self.active_tab {
+                ActiveTab::Songs => {
+                    if let Some(idx) = self.tracks.iter().position(|t| {
+                        t.title.to_lowercase().contains(&query)
+                            || t.artist.to_lowercase().contains(&query)
+                    }) {
+                        self.selected_index = idx;
+                        self.list_state.select(Some(idx));
+                    }
+                }
+                ActiveTab::Favorites => {
+                    if let Some(idx) = self.favorites.iter().position(|a| {
+                        a.title.to_lowercase().contains(&query)
+                            || a.artist.to_lowercase().contains(&query)
+                    }) {
+                        self.selected_favorite_index = idx;
+                        self.favorite_state.select(Some(idx));
+                    }
+                }
+                ActiveTab::Artists => {
+                    if let Some(idx) = self
+                        .artists
+                        .iter()
+                        .position(|a| a.name.to_lowercase().contains(&query))
+                    {
+                        self.selected_artist_index = idx;
+                        self.artist_state.select(Some(idx));
+                    }
+                }
+                ActiveTab::Albums => {
+                    if let Some(idx) = self.albums.iter().position(|a| {
+                        a.name.to_lowercase().contains(&query)
+                            || a.artist.to_lowercase().contains(&query)
+                    }) {
+                        self.selected_album_index = idx;
+                        self.album_state.select(Some(idx));
+                    }
+                }
+                ActiveTab::Playlist => {
+                    if let Some(idx) = self
+                        .playlists
+                        .iter()
+                        .position(|p| p.name.to_lowercase().contains(&query))
+                    {
+                        self.selected_playlist_index = idx;
+                        self.playlist_state.select(Some(idx));
+                    }
+                }
+                ActiveTab::Search => {}
+            },
+        }
+    }
+    pub async fn handle_inline_search_input(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.exit_inline_search();
+            }
+            KeyCode::Backspace => {
+                self.inline_search_backspace();
+            }
+            KeyCode::Char(c) => {
+                self.inline_search_input(c);
+            }
+            _ => {}
+        }
+        Ok(false)
     }
     pub fn enter_search_mode(&mut self) {
         self.input_mode = InputMode::Search;
@@ -322,6 +433,19 @@ impl App {
     }
     pub async fn load_cover_art_for_track(&mut self, track: &Track) {
         self.cover_art_protocol = None;
+        let album = track
+            .album
+            .replace(|c: char| !c.is_alphabetic() && c != '-', "_")
+            .to_lowercase()
+            .chars()
+            .fold(String::new(), |mut acc, c| {
+                if c == '_' && acc.ends_with('_') {
+                    acc
+                } else {
+                    acc.push(c);
+                    acc
+                }
+            });
 
         let url = match &track.cover_art {
             Some(url) if !url.is_empty() => url,
@@ -329,13 +453,9 @@ impl App {
         };
         let mut cache_path = std::env::temp_dir();
         cache_path.push("sonicrust");
-        cache_path.push(format!("cover_{}_{}.jpg", track.album, track.artist));
+        cache_path.push(format!("cover_{}.jpg", album));
         let img_result = if cache_path.exists() {
-            log::debug!(
-                "Using cached cover_art for {}_{}",
-                track.album,
-                track.artist
-            );
+            log::debug!("Using cached cover_art for {}", album);
             image::open(&cache_path)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         } else {
@@ -354,30 +474,17 @@ impl App {
             Err(e) => eprintln!("failed to load cover art: {}", e),
         }
     }
-    async fn fetch_and_cache_image(
-        &self,
-        url: &str,
-        track_album: &str,
-        track_artist: &str,
-    ) -> Result<String> {
-        log::debug!(
-            "Currently fetching cover are for track_id: {}_{}",
-            track_album,
-            track_artist
-        );
+    async fn fetch_and_cache_image(&self, url: &str, track_album: &str) -> Result<String> {
+        log::debug!("Currently fetching cover are for album: {}", track_album,);
         let mut path = std::env::temp_dir();
         path.push("sonicrust");
         std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
-        path.push(format!("cover_{}_{}.jpg", track_album, track_artist));
+        path.push(format!("cover_{}.jpg", track_album));
         if path.exists() {
-            log::debug!(
-                "Using cached cover art for {}_{}",
-                track_album,
-                track_artist
-            );
+            log::debug!("Using cached cover art for {}", track_album,);
             return Ok(path.to_string_lossy().to_string());
         }
-        log::debug!("fetching cover art for {}_{}", track_album, track_artist);
+        log::debug!("fetching cover art for {}", track_album);
         let img = self
             .fetch_cover_art(url)
             .await
@@ -462,6 +569,7 @@ impl App {
         self.artists = self.subsonic_client.get_all_artists().await?;
         self.albums = self.subsonic_client.get_all_albums().await?;
         self.playlists = self.subsonic_client.get_playlists().await?;
+        self.favorites = self.subsonic_client.get_all_favorites().await?;
         Ok(())
     }
     pub fn find_selected(&self) -> usize {
@@ -482,6 +590,7 @@ impl App {
                     }
                 }
                 ActiveTab::Artists => self.selected_queue_index,
+                ActiveTab::Favorites => self.selected_queue_index,
                 ActiveTab::Playlist => self.selected_queue_index,
                 ActiveTab::Songs => {
                     if !self.queue.is_empty() {
@@ -544,6 +653,16 @@ impl App {
                             self.selected_queue_index = self.selected_search_index;
                             self.playing_index = self.selected_search_index;
                             track_to_play = Some(track);
+                        }
+                    }
+                    ActiveTab::Favorites => {
+                        if let Some(track) =
+                            self.favorites.get(self.selected_favorite_index).cloned()
+                        {
+                            self.queue = vec![track.clone()];
+                            self.selected_queue_index = 0;
+                            track_to_play = Some(track);
+                            self.playing_index = self.selected_queue_index;
                         }
                     }
                     ActiveTab::Songs => {
@@ -757,10 +876,21 @@ impl App {
         if let Some(url) = &track.cover_art
             && !url.is_empty()
         {
-            match self
-                .fetch_and_cache_image(url, &track.album, &track.artist)
-                .await
-            {
+            let album = &track
+                .album
+                .replace(|c: char| !c.is_alphabetic() && c != '-', "_")
+                .to_lowercase()
+                .chars()
+                .fold(String::new(), |mut acc, c| {
+                    if c == '_' && acc.ends_with('_') {
+                        acc
+                    } else {
+                        acc.push(c);
+                        acc
+                    }
+                });
+
+            match self.fetch_and_cache_image(url, album).await {
                 Ok(path) => {
                     notif.hint(Hint::ImagePath(path));
                 }
@@ -883,6 +1013,7 @@ impl App {
             ActiveTab::Playlist => self.playlist_state.select(None),
             ActiveTab::Artists => self.artist_state.select(None),
             ActiveTab::Albums => self.album_state.select(None),
+            ActiveTab::Favorites => self.favorite_state.select(None),
             ActiveTab::Search => {
                 self.search_state.select(None);
                 self.input_mode = InputMode::Normal;
@@ -902,6 +1033,10 @@ impl App {
             }
             ActiveTab::Artists if !self.artists.is_empty() => {
                 self.artist_state.select(Some(self.selected_artist_index));
+            }
+            ActiveTab::Favorites if !self.favorites.is_empty() => {
+                self.favorite_state
+                    .select(Some(self.selected_favorite_index));
             }
             ActiveTab::Albums if !self.albums.is_empty() => {
                 self.album_state.select(Some(self.selected_album_index));
@@ -932,8 +1067,13 @@ impl App {
                     ActiveTab::Songs => {
                         self.artist_state.select(Some(self.selected_index));
                     }
+                    ActiveTab::Favorites => {
+                        self.favorite_state
+                            .select(Some(self.selected_favorite_index));
+                    }
                     ActiveTab::Playlist => {
-                        self.playlist_state.select(Some(self.selected_index));
+                        self.playlist_state
+                            .select(Some(self.selected_playlist_index));
                     }
                     ActiveTab::Artists => {
                         self.album_state.select(Some(self.selected_artist_index));
@@ -1007,6 +1147,20 @@ impl App {
                         self.list_state.select(None);
                     }
                 }
+                ActiveTab::Favorites => {
+                    if !self.favorites.is_empty() {
+                        let i = if let Some(selected) = self.favorite_state.selected() {
+                            (selected + 1) % self.favorites.len()
+                        } else {
+                            0
+                        };
+                        self.selected_favorite_index = i;
+                        self.favorite_state
+                            .select(Some(self.selected_favorite_index));
+                    } else {
+                        self.favorite_state.select(None);
+                    }
+                }
                 ActiveTab::Artists => {
                     if !self.artists.is_empty() {
                         let i = if let Some(selected) = self.artist_state.selected() {
@@ -1057,6 +1211,24 @@ impl App {
             }
             ActiveSection::Others => {
                 match self.active_tab {
+                    ActiveTab::Favorites => {
+                        if !self.favorites.is_empty() {
+                            let i = if let Some(selected) = self.favorite_state.selected() {
+                                if selected == 0 {
+                                    self.favorites.len() - 1
+                                } else {
+                                    selected - 1
+                                }
+                            } else {
+                                self.favorites.len().saturating_sub(1)
+                            };
+                            self.selected_favorite_index = i;
+                            self.favorite_state
+                                .select(Some(self.selected_favorite_index));
+                        } else {
+                            self.favorite_state.select(None);
+                        }
+                    }
                     ActiveTab::Playlist => {
                         if !self.playlists.is_empty() {
                             let i = if let Some(selected) = self.playlist_state.selected() {

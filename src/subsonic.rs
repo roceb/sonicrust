@@ -13,45 +13,57 @@ pub struct SubsonicClient {
     client: reqwest::Client,
 }
 
-#[derive(Deserialize)]
-struct SubsonicResponseEmpty {
-    #[serde(rename = "subsonic-response")]
-    subsonic_response: SubsonicResponseInnerEmpty,
-}
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct SubsonicResponse<T> {
     #[serde(rename = "subsonic-response")]
     subsonic_response: SubsonicResponseInner<T>,
 }
+
 #[derive(Deserialize, Debug)]
-struct SubsonicArtistResponse<T> {
-    #[serde(rename = "subsonic-response")]
-    subsonic_response: SubsonicArtistResponseInner<T>,
+struct SubsonicResponseInner<T> {
+    status: String,
+    #[serde(flatten)]
+    data: Option<T>,
 }
-#[derive(Deserialize, Debug)]
-struct SubsonicArtistResponseInner<T> {
-    // #[serde(flatten)]
-    artist: T,
+
+impl<T> SubsonicResponse<T> {
+    fn is_ok(&self) -> bool {
+        self.subsonic_response.status == "ok"
+    }
+    fn into_data(self) -> Result<T> {
+        if self.is_ok() {
+            self.subsonic_response
+                .data
+                .context("Response OK but no data")
+        } else {
+            Err(anyhow::anyhow!("Subsonic error response"))
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
-struct SubsonicPlaylistsResponse {
-    #[serde(rename = "subsonic-response")]
-    subsonic_response: SubsonicPlaylistsResponseInner,
+struct StarredData {
+    starred2: Favorites,
 }
 #[derive(Deserialize, Debug)]
-struct SubsonicPlaylistResponse {
-    #[serde(rename = "subsonic-response")]
-    subsonic_response: SubsonicPlaylistResponseInner,
+struct Favorites {
+    song: Option<Vec<Song>>,
+    _album: Option<Vec<AlbumInfo>>,
+    _artist: Option<Vec<ArtistInfo>>,
 }
+
 #[derive(Deserialize, Debug)]
-struct SubsonicPlaylistsResponseInner {
+struct PlaylistsData {
     playlists: PlaylistWrapper,
 }
 
 #[derive(Deserialize, Debug)]
-struct SubsonicPlaylistResponseInner {
+struct PlaylistData {
     playlist: Playlist,
+}
+#[derive(Deserialize, Debug)]
+struct ArtistData {
+    artist: Discography,
 }
 
 #[derive(Deserialize, Debug)]
@@ -67,37 +79,16 @@ struct PlaylistInfo {
     #[serde(rename = "songCount")]
     song_count: i32,
     duration: i64,
-    // #[serde(rename = "coverArt")]
-    // cover_art: String,
 }
 
 #[derive(Deserialize, Debug)]
 struct Playlist {
-    // id: String,
-    // name: String,
     #[serde(default)]
     entry: Vec<Song>,
-}
-#[derive(Deserialize)]
-struct SubsonicResponseInner<T> {
-    #[serde(flatten)]
-    data: T,
-}
-
-#[derive(Deserialize)]
-struct SubsonicResponseInnerEmpty {
-    status: String,
-    #[serde(rename = "version")]
-    _version: String,
-    #[serde(rename = "type")]
-    _type_resp: String,
-    #[serde(rename = "openSubsonic")]
-    _open_subsonic: bool,
 }
 
 #[derive(Deserialize)]
 struct GetArtistsListResponse {
-    // #[serde(rename = "albumList2")]
     artists: ArtistList,
 }
 #[derive(Deserialize)]
@@ -108,14 +99,11 @@ struct ArtistList {
 #[derive(Deserialize)]
 struct LetterArtist {
     artist: Vec<ArtistInfo>,
-    // name: String,
 }
 #[derive(Deserialize, Debug)]
 struct ArtistInfo {
     id: String,
     name: String,
-    // #[serde(rename = "coverArt")]
-    // cover_art: String,
     #[serde(rename = "albumCount")]
     album_count: i32,
 }
@@ -136,15 +124,15 @@ struct AlbumInfo {
     name: String,
     artist: String,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct GetAlbumResponse {
     album: AlbumDetail,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct AlbumDetail {
     song: Vec<Song>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Discography {
     album: Vec<AlbumInfo>,
 }
@@ -158,7 +146,6 @@ struct Song {
     duration: Option<i64>,
     #[serde(rename = "track")]
     track_number: Option<i32>,
-    // genre: Option<String>,
     #[serde(rename = "playCount")]
     play_count: Option<i32>,
     #[serde(rename = "displayAlbumArtist")]
@@ -223,7 +210,7 @@ impl SubsonicClient {
             self.client.get(url).send().await?.json().await?;
         let mut tracks = Vec::new();
 
-        for song in res.subsonic_response.data.search_result.song {
+        for song in res.into_data()?.search_result.song {
             let mut cover_art_url = Url::parse(&format!("{}/rest/getCoverArt", self.base_url))?;
             let mut cover_art_params = self.get_auth_params();
             cover_art_params.push(("id", song.id.clone()));
@@ -260,7 +247,7 @@ impl SubsonicClient {
         let mut albums = Vec::new();
         let response: SubsonicResponse<GetAlbumListResponse> =
             self.client.get(url).send().await?.json().await?;
-        let albums_response = response.subsonic_response.data.album_list.album;
+        let albums_response = response.into_data()?.album_list.album;
         for album in albums_response {
             albums.push(Album {
                 id: album.id,
@@ -269,6 +256,44 @@ impl SubsonicClient {
             });
         }
         Ok(albums)
+    }
+    pub async fn get_all_favorites(&self) -> Result<Vec<Track>> {
+        let mut url = Url::parse(&format!("{}/rest/getStarred2", self.base_url))?;
+        let params = self.get_auth_params();
+        for (key, value) in params {
+            url.query_pairs_mut().append_pair(key, &value);
+        }
+
+        let response: SubsonicResponse<StarredData> =
+            self.client.get(url).send().await?.json().await?;
+
+        let starred = response.into_data()?.starred2;
+        let mut tracks = Vec::new();
+
+        for song in starred.song.unwrap_or_default() {
+            let mut cover_art_url = Url::parse(&format!("{}/rest/getCoverArt", self.base_url))?;
+            let mut cover_art_params = self.get_auth_params();
+            cover_art_params.push(("id", song.id.clone()));
+            for (key, value) in cover_art_params {
+                cover_art_url.query_pairs_mut().append_pair(key, &value);
+            }
+
+            let duration = song.duration.unwrap_or(0) * 1_000_000;
+            tracks.push(Track {
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                album_artist: song.display_album_artist,
+                album: song.album,
+                cover_art: Some(cover_art_url.to_string()),
+                duration,
+                track_number: song.track_number,
+                play_count: song.play_count,
+                genres: song.genres.iter().map(|f| f.name.clone()).collect(),
+            });
+        }
+
+        Ok(tracks)
     }
     pub async fn get_all_artists(&self) -> Result<Vec<Artist>> {
         let mut artists = Vec::new();
@@ -279,7 +304,7 @@ impl SubsonicClient {
         }
         let response: SubsonicResponse<GetArtistsListResponse> =
             self.client.get(url).send().await?.json().await?;
-        for letter_artist in response.subsonic_response.data.artists.artist_index {
+        for letter_artist in response.into_data()?.artists.artist_index {
             for artist in letter_artist.artist {
                 artists.push(Artist {
                     id: artist.id,
@@ -298,8 +323,9 @@ impl SubsonicClient {
             url.query_pairs_mut().append_pair(key, &value);
         }
         let mut playlists: Vec<app::Playlists> = Vec::new();
-        let response: SubsonicPlaylistsResponse = self.client.get(url).send().await?.json().await?;
-        for play in response.subsonic_response.playlists.playlist {
+        let response: SubsonicResponse<PlaylistsData> =
+            self.client.get(url).send().await?.json().await?;
+        for play in response.into_data()?.playlists.playlist {
             playlists.push(app::Playlists {
                 id: play.id,
                 song_count: play.song_count,
@@ -317,8 +343,9 @@ impl SubsonicClient {
         for (key, value) in params {
             url.query_pairs_mut().append_pair(key, &value);
         }
-        let response: SubsonicPlaylistResponse = self.client.get(url).send().await?.json().await?;
-        for song in response.subsonic_response.playlist.entry {
+        let response: SubsonicResponse<PlaylistData> =
+            self.client.get(url).send().await?.json().await?;
+        for song in response.into_data()?.playlist.entry {
             let mut cover_art = Url::parse(&format!("{}/rest/getCoverArt", self.base_url))?;
             let mut cover_art_params = self.get_auth_params();
             cover_art_params.push(("id", song.id.clone()));
@@ -360,9 +387,9 @@ impl SubsonicClient {
             .with_context(|| format!("Failed to send request to {}", url))?;
         let body_text = res.text().await?;
         tracing::debug!("This is the body: \n{}", body_text);
-        let response: SubsonicArtistResponse<Discography> =
+        let response: SubsonicResponse<ArtistData> =
             self.client.get(url).send().await?.json().await?;
-        let disc = response.subsonic_response.artist.album;
+        let disc = response.into_data()?.artist.album;
         for album in disc {
             albums.push(Album {
                 name: album.name,
@@ -381,8 +408,8 @@ impl SubsonicClient {
         for (key, value) in params {
             scrobble_url.query_pairs_mut().append_pair(key, &value);
         }
-        let res: SubsonicResponseEmpty = self.client.get(scrobble_url).send().await?.json().await?;
-        if res.subsonic_response.status == "ok" {
+        let res: SubsonicResponse<()> = self.client.get(scrobble_url).send().await?.json().await?;
+        if res.is_ok() {
             Ok(())
         } else {
             Err(anyhow::anyhow!(format!(
@@ -403,8 +430,9 @@ impl SubsonicClient {
         }
         let album_response: SubsonicResponse<GetAlbumResponse> =
             self.client.get(album_url).send().await?.json().await?;
+        let a = album_response.into_data()?;
 
-        for song in album_response.subsonic_response.data.album.song {
+        for song in a.album.song {
             let length = song.duration.unwrap_or(0) * 1_000_000;
             tracks.push(Track {
                 id: song.id,
