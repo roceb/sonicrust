@@ -91,7 +91,7 @@ impl Theme {
     fn parse_color_or(&self, override_color: &Option<String>, fallback: Color) -> Color {
         override_color
             .as_deref()
-            .and_then(|s| Self::parse_color(s))
+            .and_then( Self::parse_color)
             .unwrap_or(fallback)
     }
 

@@ -72,12 +72,12 @@ impl Config {
             config.save().map_err(|e| {
                 ConfigError::Io(
                     e.downcast::<std::io::Error>()
-                        .unwrap_or_else(|e| std::io::Error::other(e)),
+                        .unwrap_or_else( std::io::Error::other),
                 )
             })?;
             return Err(ConfigError::NotFound { path: config_path });
         }
-        let contents = fs::read_to_string(&config_path).map_err(|e| ConfigError::Io(e))?;
+        let contents = fs::read_to_string(&config_path).map_err( ConfigError::Io)?;
         let config: Config = toml::from_str(&contents).map_err(|e| ConfigError::ParseError {
             path: config_path.clone(),
             reason: e.to_string(),

@@ -327,31 +327,61 @@ impl App {
             Some(url) if !url.is_empty() => url,
             _ => return,
         };
-        match self.fetch_cover_art(url).await {
+        let mut cache_path = std::env::temp_dir();
+        cache_path.push("sonicrust");
+        cache_path.push(format!("cover_{}_{}.jpg", track.album, track.artist));
+        let img_result = if cache_path.exists() {
+            log::debug!(
+                "Using cached cover_art for {}_{}",
+                track.album,
+                track.artist
+            );
+            image::open(&cache_path)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        } else {
+            self.fetch_cover_art(url).await.inspect(|img| {
+                let _ = std::fs::create_dir_all(cache_path.parent().unwrap());
+                let _ = img.save(&cache_path);
+            })
+        };
+        match img_result {
             Ok(img) => match Picker::from_query_stdio() {
                 Ok(picker) => {
                     self.cover_art_protocol = Some(picker.new_resize_protocol(img));
                 }
-                Err(e) => {
-                    log::debug!("Failed to create image picker: {}", e);
-                }
+                Err(e) => log::debug!("Failed ot create image picker: {}", e),
             },
-
-            Err(e) => {
-                eprintln!("failed to load cover art: {}", e);
-            }
+            Err(e) => eprintln!("failed to load cover art: {}", e),
         }
     }
-    async fn fetch_and_cache_image(&self, url: &str, track_id: &str) -> Result<String> {
-        log::debug!("Currently fetching cover are for track_id: {}", track_id);
+    async fn fetch_and_cache_image(
+        &self,
+        url: &str,
+        track_album: &str,
+        track_artist: &str,
+    ) -> Result<String> {
+        log::debug!(
+            "Currently fetching cover are for track_id: {}_{}",
+            track_album,
+            track_artist
+        );
+        let mut path = std::env::temp_dir();
+        path.push("sonicrust");
+        std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
+        path.push(format!("cover_{}_{}.jpg", track_album, track_artist));
+        if path.exists() {
+            log::debug!(
+                "Using cached cover art for {}_{}",
+                track_album,
+                track_artist
+            );
+            return Ok(path.to_string_lossy().to_string());
+        }
+        log::debug!("fetching cover art for {}_{}", track_album, track_artist);
         let img = self
             .fetch_cover_art(url)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch cover art: {}", e))?;
-        let mut path = std::env::temp_dir();
-        path.push("sonicrust");
-        std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
-        path.push(format!("cover_{}.jpg", track_id));
         img.save(&path).map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(path.to_string_lossy().to_string())
@@ -376,6 +406,14 @@ impl App {
             Ok(img)
         })
         .await?
+    }
+    pub fn _clear_cover_art_cache() -> Result<()> {
+        let mut path = std::env::temp_dir();
+        path.push("sonicrust");
+        if path.exists() {
+            std::fs::remove_dir_all(&path)?;
+        }
+        Ok(())
     }
 
     /// Perform local fuzzy search on loaded tracks
@@ -719,7 +757,10 @@ impl App {
         if let Some(url) = &track.cover_art
             && !url.is_empty()
         {
-            match self.fetch_and_cache_image(url, &track.id).await {
+            match self
+                .fetch_and_cache_image(url, &track.album, &track.artist)
+                .await
+            {
                 Ok(path) => {
                     notif.hint(Hint::ImagePath(path));
                 }
