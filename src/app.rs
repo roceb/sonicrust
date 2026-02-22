@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, SearchMode},
+    config::{Config, ConfigError, SearchMode},
     mpris_handler::{MprisPlayer, track_to_metadata},
     player::{Player, PlayerCommand, PlayerState, SharedPlayerState},
     search::SearchEngine,
@@ -146,7 +146,35 @@ pub enum ActiveTab {
 }
 impl App {
     pub async fn new() -> Result<Self> {
-        let config = Config::load()?;
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(ConfigError::NotFound { path }) => {
+                eprintln!(
+                    "No config found. A default config has been created at: {}\nPlease edit it and restart",
+                    path.display()
+                );
+                std::process::exit(1);
+            }
+            Err(ConfigError::ParseError { path, reason }) => {
+                eprintln!(
+                    "Failed to parse config at {}:\n {}\nPlease fix the config and restart.",
+                    path.display(),
+                    reason
+                );
+                std::process::exit(1);
+            }
+            Err(ConfigError::ValidationError(msg)) => {
+                eprintln!(
+                    "Invalid config value:\n {}\nPlease fix the config and restart.",
+                    msg
+                );
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Config error: {}", e);
+                std::process::exit(1);
+            }
+        };
         let subsonic_client = Arc::new(SubsonicClient::new(&config)?);
         let player = Rc::new(Mutex::new(Player::new()));
         let (tx, rx) = mpsc::channel::<PlayerCommand>(32);

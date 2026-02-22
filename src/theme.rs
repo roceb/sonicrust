@@ -1,21 +1,16 @@
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug,Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemePreset {
+    #[default]
     Default,
     Everforest,
     Nord,
     Dracula,
     Catppuccin,
     Custom,
-}
-
-impl Default for ThemePreset {
-    fn default() -> Self {
-        ThemePreset::Default
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
