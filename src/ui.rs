@@ -11,6 +11,81 @@ use ratatui::{
 };
 use ratatui_image::StatefulImage;
 
+struct StatefulListConfig<'a>{
+    items: Vec<ListItem<'a>>,
+    area: Rect,
+    border_style: Style,
+    title: String,
+    state: &'a mut ratatui::widgets::ListState,
+    selected_index: usize,
+    total: usize,
+    is_active: bool,
+    theme: &'a ResolvedTheme,
+}
+fn build_list_block<'a>(title: &'a str, border_style: Style) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title)
+}
+fn active_title(label: &str, count: usize, is_active: bool) -> String {
+    if is_active {
+        format!("{} ({}) [ACTIVE]", label, count)
+    } else {
+        format!("{} ({})", label, count)
+    }
+}
+
+fn render_stateful_list(
+    f: &mut Frame,
+    config: StatefulListConfig
+) {
+    let list = List::new(config.items)
+        .block(build_list_block(&config.title, config.border_style))
+        .highlight_style(
+            Style::default()
+                .bg(config.theme.highlight_bg)
+                .fg(config.theme.highlight_fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+    if config.is_active && config.total != 0 {
+        config.state.select(Some(config.selected_index.min(config.total - 1)));
+    }
+    f.render_stateful_widget(list, config.area, config.state);
+}
+
+fn active_border_style(is_active: bool, theme: &ResolvedTheme) -> Style {
+    if is_active {
+        Style::default().fg(theme.border_active)
+    } else {
+        Style::default().fg(theme.border_inactive)
+    }
+}
+fn build_list_items<'a, T>(
+    items: &'a [T],
+    selected_index: usize,
+    is_active: bool,
+    theme: &ResolvedTheme,
+    render_item: impl Fn(usize, &'a T) -> Line<'a>,
+) -> Vec<ListItem<'a>> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let is_selected = is_active && i == selected_index;
+            let style = if is_selected {
+                Style::default()
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(vec![render_item(i, item)]).style(style)
+        })
+        .collect()
+}
 pub fn draw(f: &mut Frame, app: &mut App) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -207,15 +282,14 @@ fn draw_progress_bar(f: &mut Frame, app: &App, track: &Track, area: Rect, theme:
     f.render_widget(gauge, area);
 }
 fn format_duration(sec: i64) -> String {
+    let hours = sec / 3600;
     let mins = sec / 60;
     let secs = sec % 60;
-    format!("{}:{:02}", mins, secs)
-}
-fn format_duration_hour(sec: i64) -> String {
-    let hours = sec / 3600;
-    let mins = (sec % 3600) / 60;
-    let sec = sec % 60;
-    format!("{}:{}:{:02}", hours, mins, sec)
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, mins, sec)
+    } else {
+        format!("{}:{:02}", mins, secs)
+    }
 }
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let tab_titles: Vec<Line> = vec![
@@ -270,11 +344,7 @@ fn draw_content_area_with_border(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let border_style = if is_active {
-        Style::default().fg(theme.border_active)
-    } else {
-        Style::default().fg(theme.border_inactive)
-    };
+    let border_style = active_border_style(is_active, theme);
     match app.active_tab {
         ActiveTab::Playlist => draw_playlist_styled(f, app, area, border_style, is_active, theme),
         ActiveTab::Albums => draw_album_list_styled(f, app, area, border_style, is_active, theme),
@@ -294,11 +364,7 @@ fn draw_queue_with_border(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let border_style = if is_active {
-        Style::default().fg(theme.border_active)
-    } else {
-        Style::default().fg(theme.border_inactive)
-    };
+    let border_style = active_border_style(is_active, theme);
     let title = if is_active {
         format!("Queue ({}) [ACTIVE]", app.queue.len())
     } else {
@@ -465,59 +531,38 @@ fn draw_song_list_styled(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let title = if is_active {
-        format!("Songs ({}) [ACTIVE]", app.tracks.len())
-    } else {
-        format!("Songs ({})", app.tracks.len())
-    };
-    let tracks: Vec<ListItem> = app
-        .tracks
-        .iter()
-        .enumerate()
-        .map(|(i, track)| {
-            let is_selected = is_active && i == app.selected_index;
-            let content = vec![Line::from(vec![
+    let items = build_list_items(
+        &app.tracks,
+        app.selected_index,
+        is_active,
+        theme,
+        |i, track| {
+            Line::from(vec![
                 Span::styled(
                     format!("{:03}. {} - ", i + 1, track.artist),
-                    Style::default().fg(theme.artist_color),
+                    theme.artist_color,
                 ),
-                Span::styled(&track.title, Style::default().fg(theme.fg)),
-                Span::styled(
-                    format!(" ({}) ", track.album),
-                    Style::default().fg(theme.muted_color),
-                ),
-            ])];
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.highlight_bg)
-                    .fg(theme.highlight_fg)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(content).style(style)
-        })
-        .collect();
-    let track_list = List::new(tracks)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg),
-        )
-        .highlight_symbol(">> ");
-    if is_active && !app.tracks.is_empty() {
-        if app.selected_index >= app.tracks.len() {
-            app.selected_index = app.tracks.len().saturating_sub(1);
+                Span::styled(&track.title, theme.fg),
+                Span::styled(format!(" ({}) ", track.album), theme.muted_color),
+            ])
+        },
+    );
+    let title = active_title("Songs", app.tracks.len(), is_active);
+    render_stateful_list(
+        f,
+        StatefulListConfig {
+        items,
+        area,
+        border_style,
+        title,
+        state:&mut app.list_state,
+        selected_index: app.selected_index,
+        total:app.tracks.len(),
+        is_active,
+        theme,
+
         }
-        app.list_state.select(Some(app.selected_index));
-    }
-    f.render_stateful_widget(track_list, area, &mut app.list_state);
+    );
 }
 
 fn draw_search_tab_styled(
@@ -591,87 +636,38 @@ fn draw_search_results_styled(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let title = if is_active {
-        format!("Results ({}) [ACTIVE]", app.search_results.len())
-    } else {
-        format!("Results ({})", app.search_results.len())
-    };
-    if app.search_results.is_empty() {
-        let message = if app.search_query.is_empty() {
-            "Enter a search query to find tracks, albums, or artists"
-        } else if app.is_searching {
-            "Searching..."
-        } else {
-            "No results found. Try a different search term."
-        };
-
-        let empty_message = Paragraph::new(message)
-            .style(Style::default().fg(theme.muted_color))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("Results (0)"));
-        f.render_widget(empty_message, area);
-        return;
-    }
-
-    let results: Vec<ListItem> = app
-        .search_results
-        .iter()
-        .enumerate()
-        .map(|(i, track)| {
-            let is_selected = is_active && i == app.selected_search_index;
-            let content = vec![Line::from(vec![
+    let items = build_list_items(
+        &app.search_results,
+        app.selected_search_index,
+        is_active,
+        theme,
+        |i, track| {
+            Line::from(vec![
                 Span::styled(
-                    format!("{}. ", i + 1),
-                    Style::default().fg(theme.muted_color),
+                    format!("{:03}. {} - ", i + 1, track.artist),
+                    theme.artist_color,
                 ),
-                Span::styled(
-                    format!("{} - ", track.artist),
-                    Style::default().fg(theme.artist_color),
-                ),
-                Span::styled(&track.title, Style::default().fg(theme.fg)),
-                Span::styled(
-                    format!(" [{}]", track.album),
-                    Style::default().fg(theme.album_color),
-                ),
-            ])];
+                Span::styled(&track.title, theme.fg),
+                Span::styled(format!(" ({}) ", track.album), theme.muted_color),
+            ])
+        },
+    );
+    let title = active_title("Search", app.search_results.len(), is_active);
+    render_stateful_list(
+        f,
+        StatefulListConfig {
+        items,
+        area,
+        border_style,
+        title,
+        state:&mut app.search_state,
+        selected_index: app.selected_search_index,
+        total:app.search_results.len(),
+        is_active,
+        theme,
 
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.highlight_bg)
-                    .fg(theme.highlight_fg)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(content).style(style)
-        })
-        .collect();
-
-    let results_list = List::new(results)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-
-    // Update search state selection
-    if is_active && !app.search_results.is_empty() {
-        if app.selected_search_index >= app.search_results.len() {
-            app.selected_search_index = app.search_results.len().saturating_sub(1);
         }
-        app.search_state.select(Some(app.selected_search_index));
-    }
-
-    f.render_stateful_widget(results_list, area, &mut app.search_state);
+    );
 }
 fn draw_playlist_styled(
     f: &mut Frame,
@@ -681,61 +677,38 @@ fn draw_playlist_styled(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let title = if is_active {
-        format!("Playlist ({}) [ACTIVE]", app.playlists.len())
-    } else {
-        format!("Playlist ({})", app.playlists.len())
-    };
-    let playlist: Vec<ListItem> = app
-        .playlists
-        .iter()
-        .enumerate()
-        .map(|(i, playlist)| {
-            let is_selected = is_active && i == app.selected_playlist_index;
-            let content = vec![Line::from(vec![
+    let items = build_list_items(
+        &app.playlists,
+        app.selected_playlist_index,
+        is_active,
+        theme,
+        |i, playlist| {
+            Line::from(vec![
                 Span::styled(
-                    format!("{} - ", playlist.name),
-                    Style::default().fg(theme.fg),
+                    format!("{:03}. {} - ", i + 1, playlist.name),
+                    theme.artist_color,
                 ),
-                Span::styled(
-                    format!(" {}", &playlist.song_count),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(
-                    format!(" {}", format_duration_hour(playlist.duration)),
-                    Style::default().fg(theme.muted_color),
-                ),
-            ])];
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.muted_color)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(content).style(style)
-        })
-        .collect();
-    let playlists = List::new(playlist)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg),
-        )
-        .highlight_symbol(">> ");
-    if is_active && !app.playlists.is_empty() {
-        if app.selected_playlist_index >= app.playlists.len() {
-            app.selected_playlist_index = app.playlists.len().saturating_sub(1);
+                Span::styled(format!("{}",&playlist.song_count) , theme.fg),
+                Span::styled(format!(" ({}) ", playlist.duration), theme.muted_color),
+            ])
+        },
+    );
+    let title = active_title("Playlists", app.playlists.len(), is_active);
+    render_stateful_list(
+        f,
+        StatefulListConfig {
+        items,
+        area,
+        border_style,
+        title,
+        state:&mut app.playlist_state,
+        selected_index: app.selected_playlist_index,
+        total:app.playlists.len(),
+        is_active,
+        theme,
+
         }
-        app.playlist_state.select(Some(app.selected_playlist_index));
-    }
-    f.render_stateful_widget(playlists, area, &mut app.playlist_state);
+    );
 }
 fn draw_album_list_styled(
     f: &mut Frame,
@@ -745,54 +718,37 @@ fn draw_album_list_styled(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let title = if is_active {
-        format!("Albums ({}) [ACTIVE]", app.albums.len())
-    } else {
-        format!("Albums ({})", app.albums.len())
-    };
-    let albums: Vec<ListItem> = app
-        .albums
-        .iter()
-        .enumerate()
-        .map(|(i, album)| {
-            let is_selected = is_active && i == app.selected_album_index;
-            let content = vec![Line::from(vec![
+    let items = build_list_items(
+        &app.albums,
+        app.selected_album_index,
+        is_active,
+        theme,
+        |i, album| {
+            Line::from(vec![
                 Span::styled(
-                    format!("{} - ", album.artist),
-                    Style::default().fg(theme.artist_color),
+                    format!("{:03}. {} - ", i + 1, album.name),
+                    theme.album_color,
                 ),
-                Span::raw(&album.name),
-            ])];
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.muted_color)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(content).style(style)
-        })
-        .collect();
-    let album_list = List::new(albums)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg),
-        )
-        .highlight_symbol(">> ");
-    if is_active && !app.albums.is_empty() {
-        if app.selected_album_index >= app.albums.len() {
-            app.selected_album_index = app.albums.len().saturating_sub(1);
+                Span::styled(&album.artist , theme.artist_color),
+            ])
+        },
+    );
+    let title = active_title("Albums", app.albums.len(), is_active);
+    render_stateful_list(
+        f,
+        StatefulListConfig {
+        items,
+        area,
+        border_style,
+        title,
+        state:&mut app.album_state,
+        selected_index: app.selected_album_index,
+        total:app.albums.len(),
+        is_active,
+        theme,
+
         }
-        app.album_state.select(Some(app.selected_album_index));
-    }
-    f.render_stateful_widget(album_list, area, &mut app.album_state);
+    );
 }
 fn draw_artist_list_styled(
     f: &mut Frame,
@@ -802,55 +758,37 @@ fn draw_artist_list_styled(
     is_active: bool,
     theme: &ResolvedTheme,
 ) {
-    let title = if is_active {
-        format!("Artists ({}) [ACTIVE]", app.artists.len())
-    } else {
-        format!("Artists ({})", app.artists.len())
-    };
-    let artists: Vec<ListItem> = app
-        .artists
-        .iter()
-        .enumerate()
-        .map(|(i, artist)| {
-            let is_selected = is_active && i == app.selected_artist_index;
-            let content = vec![Line::from(vec![
+    let items = build_list_items(
+        &app.artists,
+        app.selected_artist_index,
+        is_active,
+        theme,
+        |i, artist| {
+            Line::from(vec![
                 Span::styled(
-                    format!("{} - ", artist.name),
-                    Style::default().fg(theme.artist_color),
+                    format!("{:03}. {} - ", i + 1, artist.name),
+                    theme.artist_color,
                 ),
-                Span::raw(artist.album_count.to_string()),
-            ])];
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.muted_color)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(content).style(style)
-        })
-        .collect();
-    let artist_list = List::new(artists)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg),
-        )
-        .highlight_symbol(">> ");
-    if is_active && !app.artists.is_empty() {
-        if app.selected_artist_index >= app.artists.len() {
-            app.selected_artist_index = app.artists.len().saturating_sub(1);
+                Span::styled(format!(" {} ",&artist.album_count) , theme.fg),
+            ])
+        },
+    );
+    let title = active_title("Artists", app.artists.len(), is_active);
+    render_stateful_list(
+        f,
+        StatefulListConfig {
+        items,
+        area,
+        border_style,
+        title,
+        state:&mut app.artist_state,
+        selected_index: app.selected_artist_index,
+        total:app.artists.len(),
+        is_active,
+        theme,
+
         }
-        app.artist_state.select(Some(app.selected_artist_index));
-    }
-    // f.render_widget(track_list, area);
-    f.render_stateful_widget(artist_list, area, &mut app.artist_state);
+    );
 }
 fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
     let section_indicator = match app.active_section {
