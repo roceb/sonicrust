@@ -435,7 +435,7 @@ impl App {
         self.cover_art_protocol = None;
         let album = track
             .album
-            .replace(|c: char| !c.is_alphabetic() && c != '-', "_")
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "_")
             .to_lowercase()
             .chars()
             .fold(String::new(), |mut acc, c| {
@@ -878,7 +878,7 @@ impl App {
         {
             let album = &track
                 .album
-                .replace(|c: char| !c.is_alphabetic() && c != '-', "_")
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "_")
                 .to_lowercase()
                 .chars()
                 .fold(String::new(), |mut acc, c| {

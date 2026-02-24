@@ -332,18 +332,32 @@ impl SubsonicClient {
         Ok(albums)
     }
     pub async fn scrobble(&self, track: &Track, submission: bool) -> Result<()> {
-        let _: SubsonicResponseInner<()> = self.get("scrobble", vec![("id", track.id.clone()),("submission", submission.to_string())]).await?;
+        #[derive(Deserialize)]
+        struct Empty {}
+
+        let _: Empty = self
+            .get(
+                "scrobble",
+                vec![
+                    ("id", track.id.clone()),
+                    ("submission", submission.to_string()),
+                ],
+            )
+            .await?;
         Ok(())
     }
     pub async fn get_songs_in_album(&self, album: &Album) -> Result<Vec<Track>> {
-        let data :GetAlbumResponse= self.get("getAlbum", vec![("id", album.id.clone())]).await?;
+        let data: GetAlbumResponse = self.get("getAlbum", vec![("id", album.id.clone())]).await?;
         self.songs_to_tracks(data.album.song)
     }
     pub async fn get_all_songs(&self) -> Result<Vec<Track>> {
         let albums = self.get_all_albums().await?;
         let futures = albums.iter().map(|a| self.get_songs_in_album(a));
         let results = futures::future::join_all(futures).await;
-        let a = results.into_iter().flat_map(|r| r.unwrap_or_default()).collect::<Vec<_>>();
+        let a = results
+            .into_iter()
+            .flat_map(|r| r.unwrap_or_default())
+            .collect::<Vec<_>>();
         Ok(a)
     }
     pub fn get_stream_url(&self, id: &str) -> Result<String> {
