@@ -10,7 +10,7 @@ mod ui;
 use anyhow::Result;
 use app::App;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -95,6 +95,10 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                             app.start_inline_search();
                         }
                     }
+                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        app.make_favorite(true).await?
+                    }
+                    KeyCode::Char('f') => app.make_favorite(false).await?,
                     KeyCode::Char('n') => app.play_next().await?,
                     KeyCode::Char('p') => app.play_previous().await?,
                     _ => {}
@@ -102,7 +106,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
             }
         }
         app.update().await?;
-        interval(Duration::from_millis(100)).tick().await;
-        // tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        // interval(Duration::from_millis(100)).tick().await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }

@@ -1,8 +1,7 @@
+use super::App;
 use crate::app::{ActiveSection, ActiveTab, Track};
 use anyhow::Result;
 use futures::future;
-use super::App;
-
 
 impl App {
     pub fn add_search_result_to_queue(&mut self) {
@@ -66,6 +65,30 @@ impl App {
                     .await?;
                 self.queue_tab.data.extend(songs);
             }
+        }
+        Ok(())
+    }
+    pub async fn make_favorite(&mut self, remove: bool) -> Result<()> {
+        match (&self.active_section, &self.active_tab) {
+            (ActiveSection::Queue, _) => {
+                if !self.queue_tab.data.is_empty() {
+                    let song = self.queue_tab.get().unwrap();
+                    self.subsonic_client.favorite_a_song(song, remove).await?;
+                }
+            }
+            (ActiveSection::Others, ActiveTab::Songs) => {
+                if !self.tracks_tab.data.is_empty() {
+                    let song = self.tracks_tab.get().unwrap();
+                    self.subsonic_client.favorite_a_song(song, remove).await?;
+                }
+            }
+            (ActiveSection::Others, ActiveTab::Search) => {
+                if !self.search_tab.data.is_empty() {
+                    let song = self.search_tab.get().unwrap();
+                    self.subsonic_client.favorite_a_song(song, remove).await?;
+                }
+            }
+            _ => (),
         }
         Ok(())
     }

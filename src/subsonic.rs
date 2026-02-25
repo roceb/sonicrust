@@ -2,6 +2,7 @@ use crate::app;
 use crate::app::{Album, Artist, Playlists, Track};
 use crate::config::Config;
 use anyhow::{Context, Ok, Result};
+use ratatui::widgets::LegendPosition;
 use serde::Deserialize;
 use url::Url;
 
@@ -344,6 +345,17 @@ impl SubsonicClient {
                 ],
             )
             .await?;
+        Ok(())
+    }
+    pub async fn favorite_a_song(&self, track: &Track, remove: bool) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Empty {}
+
+        let mut endpoint = "star";
+        if remove {
+            endpoint = "unstar"
+        }
+        let _: Empty = self.get(endpoint, vec![("id", track.id.clone())]).await?;
         Ok(())
     }
     pub async fn get_songs_in_album(&self, album: &Album) -> Result<Vec<Track>> {

@@ -1,6 +1,6 @@
+use anyhow::Result;
 use mpris_server::{PlaybackStatus, Property};
 use notify_rust::{Hint, Notification};
-use anyhow::Result;
 
 use crate::app::Track;
 
@@ -15,8 +15,8 @@ impl App {
             PlaybackStatus::Stopped
         };
 
-        let can_next = self.queue_tab.index < self.queue_tab.len().saturating_sub(1);
-        let can_prev = self.queue_tab.index > 0;
+        let can_next = self.playing_index < self.queue_tab.len().saturating_sub(1);
+        let can_prev = self.playing_index > 0;
         let current_pos = self.player.lock().await.get_position();
 
         if let Ok(mut state) = self.shared_state.write() {
