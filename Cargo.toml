@@ -1,44 +1,43 @@
 [package]
 name = "sonicrust"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 
 [dependencies]
-
-ratatui = "0.30"
-crossterm = "0.27"
-rand = "0.8"
-
-
-rodio = "0.21.1"
-
+# the regs
 tokio = { version = "*", features = ["full"] }
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
-
-reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
-
-
 anyhow = "1.0"
 thiserror = "1.0"
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 
+# logging
 log = "0.4"
 env_logger = "0.10"
-
-dirs = "5.0"
-toml = "0.8"
-
-md5 = "0.7"
-url = "2.5"
-mpris-server = "0.8.0"
 tracing = "0.1.44"
-zbus = "5.13.2"
-fuzzy-matcher = "0.3.7"
+
+# ui
+ratatui = "0.30"
+crossterm = "0.27"
 ratatui-image = "10.0.5"
 image = "0.25.9"
+notify-rust = "4.12.0"
+
+# audio
+rodio = { version = "0.21.1", features = ["symphonia-all"] }
+mpris-server = "0.8.0"
+zbus = "5.13.2"
+
+# utils
+rand = "0.8"
+dirs = "5.0"
+toml = "0.8"
+md5 = "0.7"
+url = "2.5"
+tempfile = "3.25.0"
+fuzzy-matcher = "0.3.7"
 aws-lc-rs = { version = "1", features = [
   "bindgen",
 ] } # This is a workaround for failing builds on arm. See: https://github.com/rustls/rustls/issues/1788
-notify-rust = "4.12.0"
-tempfile = "3.25.0"

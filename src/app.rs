@@ -233,10 +233,28 @@ impl App {
             can_go_previous: false,
             position: Time::ZERO,
         }));
-        let mpris_interface = MprisPlayer::new(tx.clone(), shared_state.clone());
-        let mprisserver = Server::new("sonicrust", mpris_interface)
-            .await
-            .expect("Unable to build mpris server");
+        let mprisserver = {
+
+        let mut result = None;
+        for i in 0..10u32{
+            let iface = MprisPlayer::new(tx.clone() , shared_state.clone());
+            let name = if i ==0 {
+                "sonicrust".to_string()
+            } else {
+                format!("sonicrust.instance{}",i)
+            };
+            match Server::new(&name, iface).await{
+                Ok(s) => {
+                    result = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("Mpris name '{}' taken, trying next... ({})",name,e);
+                }
+            }
+        }
+        result.ok_or_else(|| anyhow::anyhow!("Failed to register any MPRIS name after 10 attempts"))?
+    };
         let search_engine = SearchEngine::new(config.search.fuzzy_threshold, 30);
 
         let mut app = Self {

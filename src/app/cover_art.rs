@@ -1,8 +1,8 @@
 use std::io::Cursor;
 
+use anyhow::Result;
 use image::DynamicImage;
 use ratatui_image::picker::Picker;
-use anyhow::Result;
 
 use crate::app::Track;
 
