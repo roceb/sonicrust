@@ -1,42 +1,38 @@
+pub mod cover_art;
+pub mod input;
+pub mod mpris;
+pub mod navigation;
+pub mod playback;
+pub mod queue;
+pub mod search;
 use crate::{
-    config::{Config, ConfigError, SearchMode},
-    mpris_handler::{MprisPlayer, track_to_metadata},
+    config::{Config, ConfigError},
+    mpris_handler::{MprisPlayer},
     player::{Player, PlayerCommand, PlayerState, SharedPlayerState},
     search::SearchEngine,
     subsonic::SubsonicClient,
 };
 use anyhow::Result;
 use crossterm::{
-    event::{KeyCode, KeyEvent, KeyModifiers},
     terminal::disable_raw_mode,
 };
-use futures::future;
-use image::DynamicImage;
-use mpris_server::{Metadata, PlaybackStatus, Property, Server, Time};
-use notify_rust::{Hint, Notification};
+use mpris_server::{Metadata, PlaybackStatus , Server, Time};
 use ratatui::widgets::ListState;
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{ protocol::StatefulProtocol};
 use std::{
-    io::{self, Cursor, Write},
+    io::{self, Write},
     rc::Rc,
     sync::{Arc, RwLock},
-    time::Duration,
 };
 use tokio::{
     sync::{Mutex, mpsc},
-    time::interval,
 };
 
 pub struct TerminalGuard; // used to make sure terminal goes back to normal
 impl TerminalGuard {
     pub fn new() -> Self {
-        Self
-    }
-}
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
         let original_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |x| {
+        std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
             let _ = crossterm::execute!(
                 io::stdout(),
@@ -44,56 +40,67 @@ impl Drop for TerminalGuard {
                 crossterm::event::DisableMouseCapture,
             );
             let _ = io::stdout().flush();
-            original_hook(x)
+            original_hook(info)
         }));
+        Self
     }
 }
-pub struct App {
-    pub config: Config,
-    pub subsonic_client: Arc<SubsonicClient>,
-    pub player: Rc<Mutex<Player>>,
-    pub queue: Vec<Track>,
-    pub favorites: Vec<Track>,
-    pub tracks: Vec<Track>,
-    pub albums: Vec<Album>,
-    pub artists: Vec<Artist>,
-    pub playlists: Vec<Playlists>,
-    pub selected_queue_index: usize,
-    pub selected_index: usize,
-    pub selected_artist_index: usize,
-    pub selected_album_index: usize,
-    pub selected_playlist_index: usize,
-    pub selected_favorite_index: usize,
-    pub is_playing: bool,
-    pub current_track: Option<Track>,
-    pub current_volume: f64,
-    pub playing_index: usize,
-    pub mpris: Server<MprisPlayer>,
-    pub shared_state: SharedPlayerState,
-    pub command_receiver: mpsc::Receiver<PlayerCommand>,
-    pub metadata: Metadata,
-    // State manager
-    pub queue_state: ListState,
-    pub list_state: ListState,
-    pub artist_state: ListState,
-    pub album_state: ListState,
-    pub playlist_state: ListState,
-    pub search_state: ListState,
-    pub favorite_state: ListState,
-    pub active_tab: ActiveTab,
-    pub active_section: ActiveSection,
-    // Search fields
-    pub input_mode: InputMode,
-    pub search_query: String,
-    pub search_results: Vec<Track>,
-    pub selected_search_index: usize,
-    pub search_engine: SearchEngine,
-    pub is_searching: bool,
-    // player status
-    pub on_repeat: bool,
-    // Need to work on the logic to allow shuffling
-    pub _on_shuffle: bool,
-    pub cover_art_protocol: Option<StatefulProtocol>,
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+        );
+        let _ = io::stdout().flush();
+    }
+}
+
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("No Track Loaded")]
+    NoTrackLoaded,
+    #[error("Queue is empty")]
+    EmptyQueue,
+    #[error("Playback error: {0}")]
+    Playback(#[from] anyhow::Error),
+}
+pub enum VolumeDirection {
+    Up,
+    Down,
+}
+
+pub struct TabSelection<T> {
+    pub index: usize,
+    pub state: ListState,
+    pub data: Vec<T>,
+}
+impl<T> TabSelection<T> {
+    pub fn new() -> Self {
+        TabSelection {
+            index: 0,
+            state: ListState::default(),
+            data: Vec::new(),
+        }
+    }
+    pub fn select(&mut self, idx: usize) {
+        self.index = idx;
+        self.state.select(Some(idx));
+    }
+    pub fn clear(&mut self) {
+        self.state.select(None);
+    }
+    pub fn current(&mut self) {
+        self.state.select(Some(self.index));
+    }
+    pub fn get(&mut self) -> Option<&T> {
+        self.data.get(self.index)
+    }
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +156,41 @@ pub enum ActiveTab {
     Search,
     Favorites,
 }
+
+pub struct App {
+    pub config: Config,
+    pub subsonic_client: Arc<SubsonicClient>,
+    pub player: Rc<Mutex<Player>>,
+    pub is_playing: bool,
+    pub current_track: Option<Track>,
+    pub current_volume: f64,
+    pub playing_index: usize,
+    pub mpris: Server<MprisPlayer>,
+    pub shared_state: SharedPlayerState,
+    pub command_receiver: mpsc::Receiver<PlayerCommand>,
+    pub metadata: Metadata,
+    // TabSelection
+    pub queue_tab: TabSelection<Track>,
+    pub tracks_tab: TabSelection<Track>,
+    pub artist_tab: TabSelection<Artist>,
+    pub album_tab: TabSelection<Album>,
+    pub playlist_tab: TabSelection<Playlists>,
+    pub search_tab: TabSelection<Track>,
+    pub favorite_tab: TabSelection<Track>,
+    pub active_tab: ActiveTab,
+    pub active_section: ActiveSection,
+    // Search fields
+    pub input_mode: InputMode,
+    pub search_query: String,
+    pub search_engine: SearchEngine,
+    pub is_searching: bool,
+    // player status
+    pub on_repeat: bool,
+    // Need to work on the logic to allow shuffling
+    pub _on_shuffle: bool,
+    pub cover_art_protocol: Option<StatefulProtocol>,
+}
+
 impl App {
     pub async fn new() -> Result<Self> {
         let config = match Config::load() {
@@ -201,39 +243,25 @@ impl App {
             config,
             subsonic_client: subsonic_client.clone(),
             player,
-            queue: Vec::new(),
-            tracks: Vec::new(),
-            artists: Vec::new(),
-            albums: Vec::new(),
-            playlists: Vec::new(),
-            favorites: Vec::new(),
             metadata: Metadata::default(),
-            selected_queue_index: 0,
-            selected_index: 0,
-            selected_artist_index: 0,
-            selected_album_index: 0,
-            selected_playlist_index: 0,
-            selected_favorite_index: 0,
             playing_index: 0,
             is_playing: false,
             current_track: None,
             current_volume: 1.0,
             shared_state,
-            queue_state: ListState::default(),
-            list_state: ListState::default(),
-            artist_state: ListState::default(),
-            album_state: ListState::default(),
-            search_state: ListState::default(),
-            playlist_state: ListState::default(),
-            favorite_state: ListState::default(),
+            tracks_tab: TabSelection::new(),
+            queue_tab: TabSelection::new(),
+            artist_tab: TabSelection::new(),
+            album_tab: TabSelection::new(),
+            search_tab: TabSelection::new(),
+            playlist_tab: TabSelection::new(),
+            favorite_tab: TabSelection::new(),
             mpris: mprisserver,
             command_receiver: rx,
             active_tab: ActiveTab::Songs,
             active_section: ActiveSection::Others,
             input_mode: InputMode::Normal,
             search_query: String::new(),
-            search_results: Vec::new(),
-            selected_search_index: 0,
             search_engine,
             is_searching: false,
             on_repeat: false,
@@ -243,664 +271,6 @@ impl App {
 
         app.refresh_library().await?;
         Ok(app)
-    }
-    async fn sync_mpris(&mut self) {
-        let status = if self.is_playing {
-            PlaybackStatus::Playing
-        } else if self.current_track.is_some() {
-            PlaybackStatus::Paused
-        } else {
-            PlaybackStatus::Stopped
-        };
-
-        let can_next = self.selected_queue_index < self.queue.len().saturating_sub(1);
-        let can_prev = self.selected_queue_index > 0;
-        let current_pos = self.player.lock().await.get_position();
-
-        if let Ok(mut state) = self.shared_state.write() {
-            state.status = status;
-            state.metadata = self.metadata.clone();
-            state.can_go_next = can_next;
-            state.can_go_previous = can_prev;
-            state.position = current_pos;
-        }
-
-        let _ = self
-            .mpris
-            .properties_changed([
-                Property::PlaybackStatus(status),
-                Property::Metadata(self.metadata.clone()),
-                Property::CanGoNext(can_next),
-                Property::CanGoPrevious(can_prev),
-            ])
-            .await;
-    }
-    pub fn start_inline_search(&mut self) {
-        self.input_mode = InputMode::InlineSearch;
-        self.search_query.clear();
-    }
-    pub fn exit_inline_search(&mut self) {
-        self.input_mode = InputMode::Normal;
-        self.search_query.clear();
-    }
-    pub fn inline_search_input(&mut self, c: char) {
-        if self.input_mode == InputMode::InlineSearch {
-            self.search_query.push(c);
-            self.jump_to_inline_match();
-        }
-    }
-    pub fn inline_search_backspace(&mut self) {
-        if self.input_mode == InputMode::InlineSearch {
-            self.search_query.pop();
-            self.jump_to_inline_match();
-        }
-    }
-
-    pub fn jump_to_inline_match(&mut self) {
-        if self.search_query.is_empty() {
-            return;
-        }
-        let query = self.search_query.to_lowercase();
-        match self.active_section {
-            ActiveSection::Queue => {
-                if let Some(idx) = self.queue.iter().position(|t| {
-                    t.title.to_lowercase().contains(&query)
-                        || t.artist.to_lowercase().contains(&query)
-                }) {
-                    self.selected_queue_index = idx;
-                    self.queue_state.select(Some(idx));
-                }
-            }
-            ActiveSection::Others => match self.active_tab {
-                ActiveTab::Songs => {
-                    if let Some(idx) = self.tracks.iter().position(|t| {
-                        t.title.to_lowercase().contains(&query)
-                            || t.artist.to_lowercase().contains(&query)
-                    }) {
-                        self.selected_index = idx;
-                        self.list_state.select(Some(idx));
-                    }
-                }
-                ActiveTab::Favorites => {
-                    if let Some(idx) = self.favorites.iter().position(|a| {
-                        a.title.to_lowercase().contains(&query)
-                            || a.artist.to_lowercase().contains(&query)
-                    }) {
-                        self.selected_favorite_index = idx;
-                        self.favorite_state.select(Some(idx));
-                    }
-                }
-                ActiveTab::Artists => {
-                    if let Some(idx) = self
-                        .artists
-                        .iter()
-                        .position(|a| a.name.to_lowercase().contains(&query))
-                    {
-                        self.selected_artist_index = idx;
-                        self.artist_state.select(Some(idx));
-                    }
-                }
-                ActiveTab::Albums => {
-                    if let Some(idx) = self.albums.iter().position(|a| {
-                        a.name.to_lowercase().contains(&query)
-                            || a.artist.to_lowercase().contains(&query)
-                    }) {
-                        self.selected_album_index = idx;
-                        self.album_state.select(Some(idx));
-                    }
-                }
-                ActiveTab::Playlist => {
-                    if let Some(idx) = self
-                        .playlists
-                        .iter()
-                        .position(|p| p.name.to_lowercase().contains(&query))
-                    {
-                        self.selected_playlist_index = idx;
-                        self.playlist_state.select(Some(idx));
-                    }
-                }
-                ActiveTab::Search => {}
-            },
-        }
-    }
-    pub async fn handle_inline_search_input(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Enter => {
-                self.exit_inline_search();
-            }
-            KeyCode::Backspace => {
-                self.inline_search_backspace();
-            }
-            KeyCode::Char(c) => {
-                self.inline_search_input(c);
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-    pub fn enter_search_mode(&mut self) {
-        self.input_mode = InputMode::Search;
-        self.active_tab = ActiveTab::Search;
-        self.search_query.clear();
-        self.search_results.clear();
-        self.selected_search_index = 0;
-        self.search_state.select(None);
-    }
-    pub fn exit_search_mode(&mut self) {
-        self.input_mode = InputMode::Normal;
-    }
-    pub fn search_input(&mut self, c: char) {
-        if self.input_mode == InputMode::Search {
-            self.search_query.push(c);
-            self.is_searching = true
-        }
-    }
-    pub fn search_backspace(&mut self) {
-        if self.input_mode == InputMode::Search {
-            self.search_query.pop();
-            self.is_searching = true;
-        }
-    }
-    pub fn search_clear(&mut self) {
-        self.search_query.clear();
-        self.search_results.clear();
-        self.selected_search_index = 0;
-        self.search_state.select(None);
-    }
-    pub async fn perform_search(&mut self) -> Result<()> {
-        if self.search_query.is_empty() {
-            self.search_results.clear();
-            self.search_state.select(None);
-            self.is_searching = false;
-            return Ok(());
-        }
-        match self.config.search.mode {
-            SearchMode::Local => {
-                self.perform_local_search();
-            }
-            SearchMode::Remote => {
-                self.perform_remote_search().await?;
-            }
-        }
-        self.is_searching = false;
-        self.selected_search_index = 0;
-        if !self.search_results.is_empty() {
-            self.search_state.select(Some(0));
-        } else {
-            self.search_state.select(None);
-        }
-        Ok(())
-    }
-    pub async fn load_cover_art_for_track(&mut self, track: &Track) {
-        self.cover_art_protocol = None;
-        let album = track
-            .album
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "_")
-            .to_lowercase()
-            .chars()
-            .fold(String::new(), |mut acc, c| {
-                if c == '_' && acc.ends_with('_') {
-                    acc
-                } else {
-                    acc.push(c);
-                    acc
-                }
-            });
-
-        let url = match &track.cover_art {
-            Some(url) if !url.is_empty() => url,
-            _ => return,
-        };
-        let mut cache_path = std::env::temp_dir();
-        cache_path.push("sonicrust");
-        cache_path.push(format!("cover_{}.jpg", album));
-        let img_result = if cache_path.exists() {
-            log::debug!("Using cached cover_art for {}", album);
-            image::open(&cache_path)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-        } else {
-            self.fetch_cover_art(url).await.inspect(|img| {
-                let _ = std::fs::create_dir_all(cache_path.parent().unwrap());
-                let _ = img.save(&cache_path);
-            })
-        };
-        match img_result {
-            Ok(img) => match Picker::from_query_stdio() {
-                Ok(picker) => {
-                    self.cover_art_protocol = Some(picker.new_resize_protocol(img));
-                }
-                Err(e) => log::debug!("Failed ot create image picker: {}", e),
-            },
-            Err(e) => eprintln!("failed to load cover art: {}", e),
-        }
-    }
-    async fn fetch_and_cache_image(&self, url: &str, track_album: &str) -> Result<String> {
-        log::debug!("Currently fetching cover are for album: {}", track_album,);
-        let mut path = std::env::temp_dir();
-        path.push("sonicrust");
-        std::fs::create_dir_all(&path).map_err(|e| anyhow::anyhow!(e))?;
-        path.push(format!("cover_{}.jpg", track_album));
-        if path.exists() {
-            log::debug!("Using cached cover art for {}", track_album,);
-            return Ok(path.to_string_lossy().to_string());
-        }
-        log::debug!("fetching cover art for {}", track_album);
-        let img = self
-            .fetch_cover_art(url)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to fetch cover art: {}", e))?;
-        img.save(&path).map_err(|e| anyhow::anyhow!(e))?;
-
-        Ok(path.to_string_lossy().to_string())
-    }
-
-    async fn fetch_cover_art(
-        &self,
-        url: &str,
-    ) -> Result<DynamicImage, Box<dyn std::error::Error + Send + Sync>> {
-        let url = url.to_string();
-        tokio::task::spawn_blocking(move || {
-            let res = reqwest::blocking::get(&url)?;
-            if !res.status().is_success() {
-                return Err(format!("HTTP error: {}", res.status()).into());
-            }
-            let bytes = res.bytes()?;
-            if bytes.is_empty() {
-                return Err("Empty response when fetching cover art".into());
-            }
-            let format = image::guess_format(&bytes).unwrap_or(image::ImageFormat::Jpeg);
-            let img = image::load(Cursor::new(bytes), format)?;
-            Ok(img)
-        })
-        .await?
-    }
-    pub fn _clear_cover_art_cache() -> Result<()> {
-        let mut path = std::env::temp_dir();
-        path.push("sonicrust");
-        if path.exists() {
-            std::fs::remove_dir_all(&path)?;
-        }
-        Ok(())
-    }
-
-    /// Perform local fuzzy search on loaded tracks
-    fn perform_local_search(&mut self) {
-        let results = self.search_engine.search(&self.search_query, &self.tracks);
-        self.search_results = results.into_iter().map(|r| r.track).collect();
-    }
-
-    /// Perform remote search using subsonic api. This is useful for when you have a proxy in
-    /// between to search for missing songs
-    async fn perform_remote_search(&mut self) -> Result<()> {
-        self.search_results = self.subsonic_client.search(&self.search_query).await?;
-        Ok(())
-    }
-    pub async fn play_search_result(&mut self) -> Result<()> {
-        if let Some(track) = self.search_results.get(self.selected_search_index).cloned() {
-            self.queue = vec![track.clone()];
-            self.selected_queue_index = 0;
-            self.playing_index = 0;
-
-            let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
-            let mut player = self.player.lock().await;
-            player.load_url(&stream_url).await?;
-            player.play()?;
-            self.is_playing = true;
-            self.current_track = Some(track.clone());
-            self.metadata = track_to_metadata(&track);
-            drop(player);
-            self.sync_mpris().await;
-        }
-        Ok(())
-    }
-
-    pub fn add_search_result_to_queue(&mut self) {
-        if let Some(track) = self.search_results.get(self.selected_search_index).cloned() {
-            self.queue.push(track);
-        }
-    }
-    // Add this function to UI
-    pub fn _add_all_search_result_to_queue(&mut self) {
-        self.queue.extend(self.search_results.clone());
-    }
-
-    pub async fn refresh_library(&mut self) -> Result<()> {
-        self.tracks = self.subsonic_client.get_all_songs().await?;
-        self.artists = self.subsonic_client.get_all_artists().await?;
-        self.albums = self.subsonic_client.get_all_albums().await?;
-        self.playlists = self.subsonic_client.get_playlists().await?;
-        self.favorites = self.subsonic_client.get_all_favorites().await?;
-        Ok(())
-    }
-    pub fn find_selected(&self) -> usize {
-        match self.active_section {
-            ActiveSection::Queue => {
-                if !self.queue.is_empty() {
-                    self.selected_queue_index
-                } else {
-                    0
-                }
-            }
-            ActiveSection::Others => match self.active_tab {
-                ActiveTab::Search => {
-                    if !self.search_results.is_empty() {
-                        self.selected_search_index
-                    } else {
-                        0
-                    }
-                }
-                ActiveTab::Artists => self.selected_queue_index,
-                ActiveTab::Favorites => self.selected_queue_index,
-                ActiveTab::Playlist => self.selected_queue_index,
-                ActiveTab::Songs => {
-                    if !self.queue.is_empty() {
-                        self.selected_queue_index
-                    } else {
-                        0
-                    }
-                }
-                ActiveTab::Albums => self.selected_queue_index,
-            },
-        }
-    }
-    pub async fn play_selected_section(&mut self, songindex: usize) -> Result<()> {
-        let mut track_to_play: Option<Track> = None;
-        match self.active_section {
-            ActiveSection::Queue => {
-                track_to_play = self.queue.get(songindex).cloned();
-                self.playing_index = songindex;
-            }
-            ActiveSection::Others => (),
-        }
-        if let Some(track) = track_to_play {
-            let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
-            let mut player = self.player.lock().await;
-            player.load_url(&stream_url).await?;
-            player.play()?;
-            self.is_playing = true;
-            self.current_track = Some(track.clone());
-            self.playing_index = self.selected_queue_index;
-            self.metadata = track_to_metadata(&track);
-            drop(player);
-            self.load_cover_art_for_track(&track).await;
-            self.notify_now_playing(&track).await?;
-        } else {
-            let player = self.player.lock().await;
-            player.stop()?;
-            self.is_playing = false;
-            self.current_track = None;
-        }
-        self.sync_mpris().await;
-        Ok(())
-    }
-    pub async fn play_selected(&mut self, songindex: usize) -> Result<()> {
-        match self.active_section {
-            ActiveSection::Queue => {
-                return self.play_selected_section(songindex).await;
-            }
-            ActiveSection::Others => {
-                let mut track_to_play: Option<Track> = None;
-                match self.active_tab {
-                    // ActiveTab::Queue => {
-                    //     track_to_play = self.queue.get(songindex).cloned();
-                    //     self.playing_index = songindex;
-                    // }
-                    ActiveTab::Search => {
-                        if let Some(track) =
-                            self.search_results.get(self.selected_search_index).cloned()
-                        {
-                            self.queue = self.search_results.clone();
-                            self.selected_queue_index = self.selected_search_index;
-                            self.playing_index = self.selected_search_index;
-                            track_to_play = Some(track);
-                        }
-                    }
-                    ActiveTab::Favorites => {
-                        if let Some(track) =
-                            self.favorites.get(self.selected_favorite_index).cloned()
-                        {
-                            self.queue = vec![track.clone()];
-                            self.selected_queue_index = 0;
-                            track_to_play = Some(track);
-                            self.playing_index = self.selected_queue_index;
-                        }
-                    }
-                    ActiveTab::Songs => {
-                        if let Some(track) = self.tracks.get(self.selected_index).cloned() {
-                            self.queue = vec![track.clone()];
-                            self.selected_queue_index = 0;
-                            track_to_play = Some(track);
-                            self.playing_index = self.selected_queue_index;
-                        }
-                    }
-                    ActiveTab::Artists => {
-                        if let Some(artist) = self.artists.get(self.selected_artist_index) {
-                            let artist_albums =
-                                self.subsonic_client.get_artist_albums(artist).await?;
-                            if !artist_albums.is_empty() {
-                                let songs_futures = artist_albums
-                                    .iter()
-                                    .map(|album| self.subsonic_client.get_songs_in_album(album));
-                                let nested_songs = future::try_join_all(songs_futures).await?;
-                                let songs: Vec<Track> =
-                                    nested_songs.into_iter().flatten().collect();
-                                if !songs.is_empty() {
-                                    self.queue = songs;
-                                    self.selected_queue_index = 0;
-                                    track_to_play = self.queue.first().cloned();
-                                    self.playing_index = self.selected_queue_index;
-                                }
-                            }
-                        }
-                    }
-                    ActiveTab::Albums => {
-                        if let Some(album) = self.albums.get(self.selected_album_index) {
-                            let songs = self.subsonic_client.get_songs_in_album(album).await?;
-                            if !songs.is_empty() {
-                                self.queue = songs;
-                                self.selected_queue_index = 0;
-                                track_to_play = self.queue.first().cloned();
-                                self.playing_index = self.selected_queue_index;
-                            }
-                        }
-                    }
-                    ActiveTab::Playlist => {
-                        if let Some(playlist) = self.playlists.get(self.selected_playlist_index) {
-                            let songs = self
-                                .subsonic_client
-                                .get_songs_from_playlist(playlist)
-                                .await?;
-                            if !songs.is_empty() {
-                                self.queue = songs;
-                                self.selected_queue_index = 0;
-                                track_to_play = self.queue.first().cloned();
-                                self.playing_index = self.selected_queue_index;
-                            }
-                        }
-                    }
-                };
-                if let Some(track) = track_to_play {
-                    let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
-                    let mut player = self.player.lock().await;
-                    player.load_url(&stream_url).await?;
-                    player.play()?;
-                    self.is_playing = true;
-                    self.current_track = Some(track.clone());
-                    self.playing_index = self.selected_queue_index;
-                    self.metadata = track_to_metadata(&track);
-                    drop(player);
-                    self.load_cover_art_for_track(&track).await;
-                    self.notify_now_playing(&track).await?;
-                    self.subsonic_client.scrobble(&track, false).await?;
-                } else {
-                    let player = self.player.lock().await;
-                    player.stop()?;
-                    self.is_playing = false;
-                    self.current_track = None;
-                }
-                self.sync_mpris().await;
-                Ok(())
-            }
-        }
-    }
-
-    pub async fn toggle_playback(&mut self) -> Result<()> {
-        if self.is_playing {
-            let player = self.player.lock().await;
-            player.pause()?;
-            self.is_playing = false;
-        } else if self.current_track.is_some() {
-            let player = self.player.lock().await;
-            if player.has_track_loaded() {
-                player.play()?;
-                self.is_playing = true;
-                let track = self.current_track.clone().unwrap();
-                drop(player);
-                self.notify_now_playing(&track).await?;
-            }
-        } else if !self.queue.is_empty() {
-            self.play_selected(self.playing_index).await?;
-            return Ok(());
-        }
-        self.sync_mpris().await;
-        Ok(())
-    }
-
-    async fn play_from_queue(&mut self, index: usize) -> Result<()> {
-        if let Some(track) = self.queue.get(index).cloned() {
-            let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
-            let mut player = self.player.lock().await;
-            player.load_url(&stream_url).await?;
-            player.play()?;
-            self.is_playing = true;
-            self.current_track = Some(track.clone());
-            self.playing_index = index;
-            self.metadata = track_to_metadata(&track);
-            drop(player);
-            self.load_cover_art_for_track(&track).await;
-            self.notify_now_playing(&track).await?;
-            self.sync_mpris().await;
-            self.subsonic_client
-                .scrobble(self.current_track.as_ref().unwrap(), false)
-                .await?;
-        }
-        Ok(())
-    }
-    pub async fn play_next(&mut self) -> Result<()> {
-        if !self.queue.is_empty() && self.playing_index < self.queue.len() - 1 {
-            self.play_from_queue(self.playing_index + 1).await?;
-        } else {
-            self.player.lock().await.stop()?;
-            self.is_playing = false;
-            self.current_track = None;
-            self.metadata = Metadata::default();
-            self.sync_mpris().await;
-        }
-        Ok(())
-    }
-
-    pub async fn play_previous(&mut self) -> Result<()> {
-        if !self.queue.is_empty() && self.playing_index > 0 {
-            self.play_from_queue(self.playing_index - 1).await?;
-        } else {
-            self.player.lock().await.stop()?;
-            self.is_playing = false;
-            self.metadata = Metadata::default();
-            self.sync_mpris().await;
-        }
-        Ok(())
-    }
-
-    pub async fn stop_playback(&mut self) -> Result<()> {
-        let player = self.player.lock().await;
-        player.stop()?;
-        self.is_playing = false;
-        self.current_track = None;
-        self.metadata = Metadata::default();
-        drop(player);
-        self.sync_mpris().await;
-        Ok(())
-    }
-
-    pub async fn set_volume(&mut self, volume: f64) -> Result<()> {
-        let clamped = volume.clamp(0.0, 1.0);
-        let mut player = self.player.lock().await;
-        player.set_volume(clamped as f32)?;
-
-        // Update shared state
-        if let Ok(mut state) = self.shared_state.write() {
-            state.volume = clamped;
-        }
-
-        let _ = self
-            .mpris
-            .properties_changed([Property::Volume(clamped)])
-            .await;
-
-        Ok(())
-    }
-    pub async fn volume_up(&mut self) -> Result<()> {
-        let current = { self.shared_state.read().map(|s| s.volume).unwrap_or(1.0) };
-        let new_vol = current + 0.1;
-        self.current_volume = new_vol;
-        self.set_volume(new_vol).await
-    }
-
-    pub async fn volume_down(&mut self) -> Result<()> {
-        let current = { self.shared_state.read().map(|s| s.volume).unwrap_or(1.0) };
-        let new_vol = current - 0.1;
-        self.current_volume = new_vol;
-        self.set_volume(new_vol).await
-    }
-    pub async fn _add_to_queue(&mut self) -> Result<()> {
-        todo!()
-    }
-    pub async fn seek_forward(&mut self) -> Result<()> {
-        let player = self.player.lock().await;
-        player.seek_relative(5)?;
-        Ok(())
-    }
-
-    pub async fn seek_backward(&mut self) -> Result<()> {
-        let player = self.player.lock().await;
-        player.seek_relative(-5)?;
-        Ok(())
-    }
-
-    pub async fn notify_now_playing(&mut self, track: &Track) -> Result<()> {
-        let mut notif = Notification::new()
-            .appname("Sonicrust")
-            .summary("Now playing")
-            .body(format!("{} - {}", track.title, track.artist).as_str())
-            .finalize();
-        if let Some(url) = &track.cover_art
-            && !url.is_empty()
-        {
-            let album = &track
-                .album
-                .replace(|c: char| !c.is_alphanumeric() && c != '-', "_")
-                .to_lowercase()
-                .chars()
-                .fold(String::new(), |mut acc, c| {
-                    if c == '_' && acc.ends_with('_') {
-                        acc
-                    } else {
-                        acc.push(c);
-                        acc
-                    }
-                });
-
-            match self.fetch_and_cache_image(url, album).await {
-                Ok(path) => {
-                    notif.hint(Hint::ImagePath(path));
-                }
-                Err(e) => {
-                    log::debug!("Could not load cover art for notification: {}", e);
-                }
-            }
-        }
-        let _ = notif.show();
-        Ok(())
     }
     pub async fn update(&mut self) -> Result<()> {
         while let Ok(cmd) = self.command_receiver.try_recv() {
@@ -912,7 +282,7 @@ impl App {
                         player.play()?;
                         drop(player);
                         self.sync_mpris().await;
-                    } else if !self.queue.is_empty() {
+                    } else if !self.queue_tab.data.is_empty() {
                         self.play_selected(self.playing_index).await?;
                     }
                 }
@@ -968,393 +338,12 @@ impl App {
         self.update_mpris_position().await?;
         Ok(())
     }
-    async fn update_mpris_position(&mut self) -> Result<()> {
-        if self.is_playing {
-            let current_pos = self.player.lock().await.get_position();
-            if let Ok(mut state) = self.shared_state.write() {
-                state.position = current_pos;
-            }
-        }
+    pub async fn refresh_library(&mut self) -> Result<()> {
+        self.tracks_tab.data = self.subsonic_client.get_all_songs().await?;
+        self.artist_tab.data = self.subsonic_client.get_all_artists().await?;
+        self.album_tab.data = self.subsonic_client.get_all_albums().await?;
+        self.playlist_tab.data = self.subsonic_client.get_playlists().await?;
+        self.favorite_tab.data = self.subsonic_client.get_all_favorites().await?;
         Ok(())
-    }
-    async fn check_track_finished(&mut self) -> Result<()> {
-        if !self.is_playing || self.current_track.is_none() {
-            return Ok(());
-        }
-        let is_finished = {
-            let player = self.player.lock().await;
-            player.is_finished() && player.has_track_loaded()
-        };
-        if is_finished {
-            self.on_track_finished().await?;
-        }
-        Ok(())
-    }
-    async fn on_track_finished(&mut self) -> Result<()> {
-        self.subsonic_client
-            .scrobble(self.current_track.as_ref().unwrap(), true)
-            .await?;
-        if self.on_repeat {
-            self.play_selected(self.playing_index).await?;
-        } else if self.playing_index < self.queue.len().saturating_sub(1) {
-            self.play_next().await?;
-        } else {
-            self.is_playing = false;
-            self.current_track = None;
-            self.metadata = Metadata::default();
-            self.sync_mpris().await;
-        }
-        Ok(())
-    }
-    pub fn select_tab(&mut self, tab: ActiveTab) {
-        match self.active_tab {
-            // ActiveTab::Queue => self.queue_state.select(None),
-            ActiveTab::Songs => self.list_state.select(None),
-            ActiveTab::Playlist => self.playlist_state.select(None),
-            ActiveTab::Artists => self.artist_state.select(None),
-            ActiveTab::Albums => self.album_state.select(None),
-            ActiveTab::Favorites => self.favorite_state.select(None),
-            ActiveTab::Search => {
-                self.search_state.select(None);
-                self.input_mode = InputMode::Normal;
-            }
-        }
-
-        self.active_tab = tab.clone();
-
-        // Initialize new tab state
-        match tab {
-            ActiveTab::Playlist if !self.playlists.is_empty() => {
-                self.playlist_state
-                    .select(Some(self.selected_playlist_index));
-            }
-            ActiveTab::Songs if !self.tracks.is_empty() => {
-                self.list_state.select(Some(self.selected_index));
-            }
-            ActiveTab::Artists if !self.artists.is_empty() => {
-                self.artist_state.select(Some(self.selected_artist_index));
-            }
-            ActiveTab::Favorites if !self.favorites.is_empty() => {
-                self.favorite_state
-                    .select(Some(self.selected_favorite_index));
-            }
-            ActiveTab::Albums if !self.albums.is_empty() => {
-                self.album_state.select(Some(self.selected_album_index));
-            }
-            ActiveTab::Search if !self.search_results.is_empty() => {
-                self.search_state.select(Some(self.selected_search_index));
-            }
-            _ => {}
-        }
-    }
-    pub fn next_tab(&mut self) {
-        self.active_section = match self.active_section {
-            ActiveSection::Queue => ActiveSection::Others,
-            ActiveSection::Others => ActiveSection::Queue,
-        };
-        match self.active_section {
-            ActiveSection::Queue => {
-                if !self.queue.is_empty() {
-                    self.queue_state.select(Some(self.selected_queue_index));
-                }
-            }
-            ActiveSection::Others => {
-                // ActiveTab::Queue => {
-                //     self.queue_state.select(None);
-                //     ActiveTab::Songs
-                // }
-                match self.active_tab {
-                    ActiveTab::Songs => {
-                        self.artist_state.select(Some(self.selected_index));
-                    }
-                    ActiveTab::Favorites => {
-                        self.favorite_state
-                            .select(Some(self.selected_favorite_index));
-                    }
-                    ActiveTab::Playlist => {
-                        self.playlist_state
-                            .select(Some(self.selected_playlist_index));
-                    }
-                    ActiveTab::Artists => {
-                        self.album_state.select(Some(self.selected_artist_index));
-                    }
-                    ActiveTab::Albums => {
-                        self.list_state.select(Some(self.selected_album_index));
-                    }
-                    ActiveTab::Search => {
-                        self.list_state.select(Some(self.selected_search_index));
-                    }
-                }
-            }
-        };
-    }
-    pub fn previous_tab(&mut self) {
-        self.next_tab();
-    }
-    pub fn next_item_in_tab(&mut self) {
-        match self.active_section {
-            ActiveSection::Queue => {
-                if !self.queue.is_empty() {
-                    let i = if let Some(selected) = self.queue_state.selected() {
-                        (selected + 1) % self.queue.len()
-                    } else {
-                        0
-                    };
-                    self.selected_queue_index = i;
-                    self.queue_state.select(Some(self.selected_queue_index));
-                } else {
-                    self.queue_state.select(None);
-                }
-            }
-            ActiveSection::Others => match self.active_tab {
-                ActiveTab::Search => {
-                    if !self.search_results.is_empty() {
-                        let i = if let Some(selected) = self.search_state.selected() {
-                            (selected + 1) % self.search_results.len()
-                        } else {
-                            0
-                        };
-                        self.selected_search_index = i;
-                        self.search_state.select(Some(self.selected_search_index));
-                    } else {
-                        self.search_state.select(None);
-                    }
-                }
-                ActiveTab::Playlist => {
-                    if !self.playlists.is_empty() {
-                        let i = if let Some(selected) = self.playlist_state.selected() {
-                            (selected + 1) % self.playlists.len()
-                        } else {
-                            0
-                        };
-                        self.selected_playlist_index = i;
-                        self.playlist_state
-                            .select(Some(self.selected_playlist_index));
-                    } else {
-                        self.playlist_state.select(None);
-                    }
-                }
-                ActiveTab::Songs => {
-                    if !self.tracks.is_empty() {
-                        let i = if let Some(selected) = self.list_state.selected() {
-                            (selected + 1) % self.tracks.len()
-                        } else {
-                            0
-                        };
-                        self.selected_index = i;
-                        self.list_state.select(Some(self.selected_index));
-                    } else {
-                        self.list_state.select(None);
-                    }
-                }
-                ActiveTab::Favorites => {
-                    if !self.favorites.is_empty() {
-                        let i = if let Some(selected) = self.favorite_state.selected() {
-                            (selected + 1) % self.favorites.len()
-                        } else {
-                            0
-                        };
-                        self.selected_favorite_index = i;
-                        self.favorite_state
-                            .select(Some(self.selected_favorite_index));
-                    } else {
-                        self.favorite_state.select(None);
-                    }
-                }
-                ActiveTab::Artists => {
-                    if !self.artists.is_empty() {
-                        let i = if let Some(selected) = self.artist_state.selected() {
-                            (selected + 1) % self.artists.len()
-                        } else {
-                            0
-                        };
-                        self.selected_artist_index = i;
-                        self.artist_state.select(Some(self.selected_artist_index));
-                    } else {
-                        self.artist_state.select(None);
-                    }
-                }
-                ActiveTab::Albums => {
-                    if !self.albums.is_empty() {
-                        let i = if let Some(selected) = self.album_state.selected() {
-                            (selected + 1) % self.albums.len()
-                        } else {
-                            0
-                        };
-                        self.selected_album_index = i;
-                        self.album_state.select(Some(self.selected_album_index));
-                    } else {
-                        self.album_state.select(None);
-                    }
-                }
-            },
-        }
-    }
-    pub fn previous_item_in_tab(&mut self) {
-        match self.active_section {
-            ActiveSection::Queue => {
-                if !self.queue.is_empty() {
-                    let i = if let Some(selected) = self.queue_state.selected() {
-                        if selected == 0 {
-                            self.queue.len() - 1
-                        } else {
-                            selected - 1
-                        }
-                    } else {
-                        self.queue.len().saturating_sub(1)
-                    };
-                    self.selected_queue_index = i;
-                    self.queue_state.select(Some(self.selected_queue_index));
-                } else {
-                    self.queue_state.select(None);
-                }
-            }
-            ActiveSection::Others => {
-                match self.active_tab {
-                    ActiveTab::Favorites => {
-                        if !self.favorites.is_empty() {
-                            let i = if let Some(selected) = self.favorite_state.selected() {
-                                if selected == 0 {
-                                    self.favorites.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.favorites.len().saturating_sub(1)
-                            };
-                            self.selected_favorite_index = i;
-                            self.favorite_state
-                                .select(Some(self.selected_favorite_index));
-                        } else {
-                            self.favorite_state.select(None);
-                        }
-                    }
-                    ActiveTab::Playlist => {
-                        if !self.playlists.is_empty() {
-                            let i = if let Some(selected) = self.playlist_state.selected() {
-                                if selected == 0 {
-                                    self.playlists.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.playlists.len().saturating_sub(1)
-                            };
-                            self.selected_playlist_index = i;
-                            self.playlist_state
-                                .select(Some(self.selected_playlist_index));
-                        } else {
-                            self.playlist_state.select(None);
-                        }
-                    }
-                    ActiveTab::Search => {
-                        if !self.search_results.is_empty() {
-                            let i = if let Some(selected) = self.search_state.selected() {
-                                if selected == 0 {
-                                    self.search_results.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.search_results.len().saturating_sub(1)
-                            };
-                            self.selected_search_index = i;
-                            self.search_state.select(Some(self.selected_search_index));
-                        } else {
-                            self.search_state.select(None);
-                        }
-                    }
-                    ActiveTab::Songs => {
-                        if !self.tracks.is_empty() {
-                            let i = if let Some(selected) = self.list_state.selected() {
-                                if selected == 0 {
-                                    self.tracks.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.tracks.len().saturating_sub(1)
-                            };
-                            self.selected_index = i;
-                            self.list_state.select(Some(self.selected_index));
-                        } else {
-                            self.list_state.select(None);
-                        }
-                    }
-                    ActiveTab::Artists => {
-                        if !self.artists.is_empty() {
-                            let i = if let Some(selected) = self.artist_state.selected() {
-                                if selected == 0 {
-                                    self.artists.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.artists.len().saturating_sub(1)
-                            };
-                            self.selected_artist_index = i;
-                            self.artist_state.select(Some(self.selected_artist_index));
-                        } else {
-                            self.artist_state.select(None);
-                        }
-                    }
-                    ActiveTab::Albums => {
-                        if !self.albums.is_empty() {
-                            let i = if let Some(selected) = self.album_state.selected() {
-                                if selected == 0 {
-                                    self.albums.len() - 1
-                                } else {
-                                    selected - 1
-                                }
-                            } else {
-                                self.albums.len().saturating_sub(1)
-                            };
-                            self.selected_album_index = i;
-                            self.album_state.select(Some(self.selected_album_index)); // Corrected
-                        } else {
-                            self.album_state.select(None);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pub async fn handle_search_input(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Esc => {
-                self.exit_search_mode();
-            }
-            KeyCode::Enter => {
-                if !self.search_results.is_empty() {
-                    self.perform_search().await?;
-                    self.exit_search_mode();
-                } else if !self.search_query.is_empty() {
-                    self.play_search_result().await?;
-                    self.exit_search_mode();
-                } else {
-                    self.perform_search().await?;
-                }
-            }
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.search_clear();
-            }
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.add_search_result_to_queue();
-            }
-            KeyCode::Char(c) => {
-                self.search_input(c);
-                //We need a delay here or else every key will perform a search, it can get
-                //expensive with big libraries
-                interval(Duration::from_millis(100)).tick().await;
-                self.perform_search().await?;
-            }
-            KeyCode::Backspace => {
-                self.search_backspace();
-                interval(Duration::from_millis(100)).tick().await;
-                self.perform_search().await?;
-            }
-            _ => {}
-        }
-        Ok(false)
     }
 }

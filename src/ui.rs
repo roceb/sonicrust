@@ -11,7 +11,7 @@ use ratatui::{
 };
 use ratatui_image::StatefulImage;
 
-struct StatefulListConfig<'a>{
+struct StatefulListConfig<'a> {
     items: Vec<ListItem<'a>>,
     area: Rect,
     border_style: Style,
@@ -36,10 +36,7 @@ fn active_title(label: &str, count: usize, is_active: bool) -> String {
     }
 }
 
-fn render_stateful_list(
-    f: &mut Frame,
-    config: StatefulListConfig
-) {
+fn render_stateful_list(f: &mut Frame, config: StatefulListConfig) {
     let list = List::new(config.items)
         .block(build_list_block(&config.title, config.border_style))
         .highlight_style(
@@ -50,7 +47,9 @@ fn render_stateful_list(
         )
         .highlight_symbol(">> ");
     if config.is_active && config.total != 0 {
-        config.state.select(Some(config.selected_index.min(config.total - 1)));
+        config
+            .state
+            .select(Some(config.selected_index.min(config.total - 1)));
     }
     f.render_stateful_widget(list, config.area, config.state);
 }
@@ -366,11 +365,11 @@ fn draw_queue_with_border(
 ) {
     let border_style = active_border_style(is_active, theme);
     let title = if is_active {
-        format!("Queue ({}) [ACTIVE]", app.queue.len())
+        format!("Queue ({}) [ACTIVE]", app.queue_tab.len())
     } else {
-        format!("Queue ({})", app.queue.len())
+        format!("Queue ({})", app.queue_tab.len())
     };
-    if app.queue.is_empty() {
+    if app.queue_tab.data.is_empty() {
         let empty_message =
             Paragraph::new("No tracks in queue\n Select a track and press Enter to add")
                 .style(Style::default().fg(theme.muted_color))
@@ -384,13 +383,20 @@ fn draw_queue_with_border(
         f.render_widget(empty_message, area);
         return;
     }
+    if is_active {
+        if app.queue_tab.index >= app.queue_tab.len() {
+            app.queue_tab.index = app.queue_tab.len().saturating_sub(1);
+        }
+        app.queue_tab.current();
+    }
     let tracks: Vec<ListItem> = app
-        .queue
+        .queue_tab
+        .data
         .iter()
         .enumerate()
         .map(|(i, track)| {
             let is_playing = i == app.playing_index && app.current_track.is_some();
-            let is_selected = is_active && i == app.selected_queue_index;
+            let is_selected = is_active && i == app.queue_tab.index;
             let playing_indicator = if is_playing {
                 if app.is_playing { "▶ " } else { "⏸ " }
             } else {
@@ -452,13 +458,7 @@ fn draw_queue_with_border(
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
-    if is_active {
-        if app.selected_queue_index >= app.queue.len() {
-            app.selected_queue_index = app.queue.len().saturating_sub(1);
-        }
-        app.queue_state.select(Some(app.selected_queue_index));
-    }
-    f.render_stateful_widget(queue_list, area, &mut app.queue_state);
+    f.render_stateful_widget(queue_list, area, &mut app.queue_tab.state);
 }
 
 fn draw_favorite_list_styled(
@@ -470,16 +470,23 @@ fn draw_favorite_list_styled(
     theme: &ResolvedTheme,
 ) {
     let title = if is_active {
-        format!("Favorites ({}) [ACTIVE]", app.favorites.len())
+        format!("Favorites ({}) [ACTIVE]", app.favorite_tab.len())
     } else {
-        format!("Favorites ({})", app.favorites.len())
+        format!("Favorites ({})", app.favorite_tab.len())
     };
+    if is_active && !app.favorite_tab.data.is_empty() {
+        if app.favorite_tab.index >= app.favorite_tab.len() {
+            app.favorite_tab.index = app.favorite_tab.len().saturating_sub(1);
+        }
+        app.favorite_tab.current();
+    }
     let tracks: Vec<ListItem> = app
-        .favorites
+        .favorite_tab
+        .data
         .iter()
         .enumerate()
         .map(|(i, track)| {
-            let is_selected = is_active && i == app.selected_favorite_index;
+            let is_selected = is_active && i == app.favorite_tab.index;
             let content = vec![Line::from(vec![
                 Span::styled(
                     format!("{:03}. {} - ", i + 1, track.artist),
@@ -515,13 +522,7 @@ fn draw_favorite_list_styled(
                 .fg(theme.highlight_fg),
         )
         .highlight_symbol(">> ");
-    if is_active && !app.favorites.is_empty() {
-        if app.selected_favorite_index >= app.favorites.len() {
-            app.selected_favorite_index = app.favorites.len().saturating_sub(1);
-        }
-        app.favorite_state.select(Some(app.selected_favorite_index));
-    }
-    f.render_stateful_widget(track_list, area, &mut app.favorite_state);
+    f.render_stateful_widget(track_list, area, &mut app.favorite_tab.state);
 }
 fn draw_song_list_styled(
     f: &mut Frame,
@@ -532,8 +533,8 @@ fn draw_song_list_styled(
     theme: &ResolvedTheme,
 ) {
     let items = build_list_items(
-        &app.tracks,
-        app.selected_index,
+        &app.tracks_tab.data,
+        app.tracks_tab.index,
         is_active,
         theme,
         |i, track| {
@@ -547,21 +548,21 @@ fn draw_song_list_styled(
             ])
         },
     );
-    let title = active_title("Songs", app.tracks.len(), is_active);
+    let total= app.tracks_tab.len();
+    let title = active_title("Songs", total, is_active);
     render_stateful_list(
         f,
         StatefulListConfig {
-        items,
-        area,
-        border_style,
-        title,
-        state:&mut app.list_state,
-        selected_index: app.selected_index,
-        total:app.tracks.len(),
-        is_active,
-        theme,
-
-        }
+            items,
+            area,
+            border_style,
+            title,
+            state: &mut app.tracks_tab.state,
+            selected_index: app.tracks_tab.index,
+            total,
+            is_active,
+            theme,
+        },
     );
 }
 
@@ -637,8 +638,8 @@ fn draw_search_results_styled(
     theme: &ResolvedTheme,
 ) {
     let items = build_list_items(
-        &app.search_results,
-        app.selected_search_index,
+        &app.search_tab.data,
+        app.search_tab.index,
         is_active,
         theme,
         |i, track| {
@@ -652,21 +653,21 @@ fn draw_search_results_styled(
             ])
         },
     );
-    let title = active_title("Search", app.search_results.len(), is_active);
+    let total = app.search_tab.len();
+    let title = active_title("Search", total, is_active);
     render_stateful_list(
         f,
         StatefulListConfig {
-        items,
-        area,
-        border_style,
-        title,
-        state:&mut app.search_state,
-        selected_index: app.selected_search_index,
-        total:app.search_results.len(),
-        is_active,
-        theme,
-
-        }
+            items,
+            area,
+            border_style,
+            title,
+            state: &mut app.search_tab.state,
+            selected_index: app.search_tab.index,
+            total,
+            is_active,
+            theme,
+        },
     );
 }
 fn draw_playlist_styled(
@@ -678,8 +679,8 @@ fn draw_playlist_styled(
     theme: &ResolvedTheme,
 ) {
     let items = build_list_items(
-        &app.playlists,
-        app.selected_playlist_index,
+        &app.playlist_tab.data,
+        app.playlist_tab.index,
         is_active,
         theme,
         |i, playlist| {
@@ -688,26 +689,26 @@ fn draw_playlist_styled(
                     format!("{:03}. {} - ", i + 1, playlist.name),
                     theme.artist_color,
                 ),
-                Span::styled(format!("{}",&playlist.song_count) , theme.fg),
+                Span::styled(format!("{}", &playlist.song_count), theme.fg),
                 Span::styled(format!(" ({}) ", playlist.duration), theme.muted_color),
             ])
         },
     );
-    let title = active_title("Playlists", app.playlists.len(), is_active);
+    let total = app.playlist_tab.len();
+    let title = active_title("Playlists", total, is_active);
     render_stateful_list(
         f,
         StatefulListConfig {
-        items,
-        area,
-        border_style,
-        title,
-        state:&mut app.playlist_state,
-        selected_index: app.selected_playlist_index,
-        total:app.playlists.len(),
-        is_active,
-        theme,
-
-        }
+            items,
+            area,
+            border_style,
+            title,
+            state: &mut app.playlist_tab.state,
+            selected_index: app.playlist_tab.index,
+            total,
+            is_active,
+            theme,
+        },
     );
 }
 fn draw_album_list_styled(
@@ -719,8 +720,8 @@ fn draw_album_list_styled(
     theme: &ResolvedTheme,
 ) {
     let items = build_list_items(
-        &app.albums,
-        app.selected_album_index,
+        &app.album_tab.data,
+        app.album_tab.index,
         is_active,
         theme,
         |i, album| {
@@ -729,25 +730,25 @@ fn draw_album_list_styled(
                     format!("{:03}. {} - ", i + 1, album.name),
                     theme.album_color,
                 ),
-                Span::styled(&album.artist , theme.artist_color),
+                Span::styled(&album.artist, theme.artist_color),
             ])
         },
     );
-    let title = active_title("Albums", app.albums.len(), is_active);
+    let total = app.album_tab.len();
+    let title = active_title("Albums", total, is_active);
     render_stateful_list(
         f,
         StatefulListConfig {
-        items,
-        area,
-        border_style,
-        title,
-        state:&mut app.album_state,
-        selected_index: app.selected_album_index,
-        total:app.albums.len(),
-        is_active,
-        theme,
-
-        }
+            items,
+            area,
+            border_style,
+            title,
+            state: &mut app.album_tab.state,
+            selected_index: app.album_tab.index,
+            total,
+            is_active,
+            theme,
+        },
     );
 }
 fn draw_artist_list_styled(
@@ -759,8 +760,8 @@ fn draw_artist_list_styled(
     theme: &ResolvedTheme,
 ) {
     let items = build_list_items(
-        &app.artists,
-        app.selected_artist_index,
+        &app.artist_tab.data,
+        app.artist_tab.index,
         is_active,
         theme,
         |i, artist| {
@@ -769,25 +770,25 @@ fn draw_artist_list_styled(
                     format!("{:03}. {} - ", i + 1, artist.name),
                     theme.artist_color,
                 ),
-                Span::styled(format!(" {} ",&artist.album_count) , theme.fg),
+                Span::styled(format!(" {} ", &artist.album_count), theme.fg),
             ])
         },
     );
-    let title = active_title("Artists", app.artists.len(), is_active);
+    let total = app.artist_tab.len();
+    let title = active_title("Artists", total, is_active);
     render_stateful_list(
         f,
         StatefulListConfig {
-        items,
-        area,
-        border_style,
-        title,
-        state:&mut app.artist_state,
-        selected_index: app.selected_artist_index,
-        total:app.artists.len(),
-        is_active,
-        theme,
-
-        }
+            items,
+            area,
+            border_style,
+            title,
+            state: &mut app.artist_tab.state,
+            selected_index: app.artist_tab.index,
+            total,
+            is_active,
+            theme,
+        },
     );
 }
 fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTheme) {
