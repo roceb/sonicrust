@@ -1,10 +1,10 @@
-use std::time::Duration;
-
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tokio::time::interval;
 use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::{app::{ActiveSection, ActiveTab, InputMode}, config::SearchMode};
+use crate::{
+    app::{ActiveSection, ActiveTab, InputMode},
+    config::SearchMode,
+};
 
 use super::App;
 impl App {
@@ -159,7 +159,9 @@ impl App {
     }
     /// Perform local fuzzy search on loaded tracks
     fn perform_local_search(&mut self) {
-        let results = self.search_engine.search(&self.search_query, &self.tracks_tab.data);
+        let results = self
+            .search_engine
+            .search(&self.search_query, &self.tracks_tab.data);
         self.search_tab.data = results.into_iter().map(|r| r.track).collect();
     }
 
@@ -175,10 +177,7 @@ impl App {
                 self.exit_search_mode();
             }
             KeyCode::Enter => {
-                if !self.search_tab.data.is_empty() {
-                    self.perform_search().await?;
-                    self.exit_search_mode();
-                } else if !self.search_query.is_empty() {
+                if !self.search_query.is_empty() {
                     self.play_search_result().await?;
                     self.exit_search_mode();
                 } else {
@@ -195,13 +194,13 @@ impl App {
                 self.search_input(c);
                 //We need a delay here or else every key will perform a search, it can get
                 //expensive with big libraries
-                interval(Duration::from_millis(100)).tick().await;
-                self.perform_search().await?;
+                self.last_search_keystroke = Some(std::time::Instant::now());
+                // self.perform_search().await?;
             }
             KeyCode::Backspace => {
                 self.search_backspace();
-                interval(Duration::from_millis(100)).tick().await;
-                self.perform_search().await?;
+                self.last_search_keystroke = Some(std::time::Instant::now());
+                // self.perform_search().await?;
             }
             _ => {}
         }

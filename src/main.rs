@@ -22,7 +22,6 @@ use std::{
     io::{self},
     time::Duration,
 };
-use tokio::time::interval;
 
 use crate::app::InputMode;
 
@@ -106,7 +105,6 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
             }
         }
         app.update().await?;
-        // interval(Duration::from_millis(100)).tick().await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 }

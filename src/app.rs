@@ -7,26 +7,23 @@ pub mod queue;
 pub mod search;
 use crate::{
     config::{Config, ConfigError},
-    mpris_handler::{MprisPlayer},
+    mpris_handler::MprisPlayer,
     player::{Player, PlayerCommand, PlayerState, SharedPlayerState},
     search::SearchEngine,
     subsonic::SubsonicClient,
 };
 use anyhow::Result;
-use crossterm::{
-    terminal::disable_raw_mode,
-};
-use mpris_server::{Metadata, PlaybackStatus , Server, Time};
+use crossterm::terminal::disable_raw_mode;
+use mpris_server::{Metadata, PlaybackStatus, Server, Time};
 use ratatui::widgets::ListState;
-use ratatui_image::{ protocol::StatefulProtocol};
+use ratatui_image::protocol::StatefulProtocol;
 use std::{
     io::{self, Write},
     rc::Rc,
     sync::{Arc, RwLock},
+    time::Duration,
 };
-use tokio::{
-    sync::{Mutex, mpsc},
-};
+use tokio::sync::{Mutex, mpsc};
 
 pub struct TerminalGuard; // used to make sure terminal goes back to normal
 impl TerminalGuard {
@@ -56,7 +53,6 @@ impl Drop for TerminalGuard {
         let _ = io::stdout().flush();
     }
 }
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -157,9 +153,23 @@ pub enum ActiveTab {
     Favorites,
 }
 
+pub enum LibraryMessage {
+    Loaded {
+        songs: Vec<Track>,
+        artists: Vec<Artist>,
+        albums: Vec<Album>,
+        playlists: Vec<Playlists>,
+        favorites: Vec<Track>,
+    },
+    SongsAppended(Vec<Track>),
+    Error(String),
+}
+
 pub struct App {
     pub config: Config,
     pub subsonic_client: Arc<SubsonicClient>,
+    pub needs_initial_load: bool,
+    pub library_rx: Option<mpsc::Receiver<LibraryMessage>>,
     pub player: Rc<Mutex<Player>>,
     pub is_playing: bool,
     pub current_track: Option<Track>,
@@ -169,6 +179,9 @@ pub struct App {
     pub shared_state: SharedPlayerState,
     pub command_receiver: mpsc::Receiver<PlayerCommand>,
     pub metadata: Metadata,
+    pub widget_notification: Option<(String, std::time::Instant)>,
+    pub w_notification_duration: std::time::Duration,
+    pub last_search_keystroke: Option<std::time::Instant>,
     // TabSelection
     pub queue_tab: TabSelection<Track>,
     pub tracks_tab: TabSelection<Track>,
@@ -234,31 +247,33 @@ impl App {
             position: Time::ZERO,
         }));
         let mprisserver = {
-
-        let mut result = None;
-        for i in 0..10u32{
-            let iface = MprisPlayer::new(tx.clone() , shared_state.clone());
-            let name = if i ==0 {
-                "sonicrust".to_string()
-            } else {
-                format!("sonicrust.instance{}",i)
-            };
-            match Server::new(&name, iface).await{
-                Ok(s) => {
-                    result = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("Mpris name '{}' taken, trying next... ({})",name,e);
+            let mut result = None;
+            for i in 0..10u32 {
+                let iface = MprisPlayer::new(tx.clone(), shared_state.clone());
+                let name = if i == 0 {
+                    "sonicrust".to_string()
+                } else {
+                    format!("sonicrust.instance{}", i)
+                };
+                match Server::new(&name, iface).await {
+                    Ok(s) => {
+                        result = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("Mpris name '{}' taken, trying next... ({})", name, e);
+                    }
                 }
             }
-        }
-        result.ok_or_else(|| anyhow::anyhow!("Failed to register any MPRIS name after 10 attempts"))?
-    };
+            result.ok_or_else(|| {
+                anyhow::anyhow!("Failed to register any MPRIS name after 10 attempts")
+            })?
+        };
         let search_engine = SearchEngine::new(config.search.fuzzy_threshold, 30);
 
-        let mut app = Self {
+        let app = Self {
             config,
+            needs_initial_load: true,
             subsonic_client: subsonic_client.clone(),
             player,
             metadata: Metadata::default(),
@@ -267,6 +282,9 @@ impl App {
             current_track: None,
             current_volume: 1.0,
             shared_state,
+            last_search_keystroke: None,
+            widget_notification: None,
+            w_notification_duration: std::time::Duration::from_secs(3),
             tracks_tab: TabSelection::new(),
             queue_tab: TabSelection::new(),
             artist_tab: TabSelection::new(),
@@ -276,6 +294,7 @@ impl App {
             favorite_tab: TabSelection::new(),
             mpris: mprisserver,
             command_receiver: rx,
+            library_rx: None,
             active_tab: ActiveTab::Songs,
             active_section: ActiveSection::Others,
             input_mode: InputMode::Normal,
@@ -287,10 +306,47 @@ impl App {
             cover_art_protocol: None,
         };
 
-        app.refresh_library().await?;
+        // app.refresh_library().await?;
         Ok(app)
     }
     pub async fn update(&mut self) -> Result<()> {
+        if self.needs_initial_load {
+            self.needs_initial_load = false;
+            self.start_background_load();
+            self.set_notification("Loading Library...");
+            // self.refresh_library().await?;
+            // self.set_notification("Library loaded");
+        }
+        if let Some(rx) = &mut self.library_rx {
+            match rx.try_recv() {
+                Ok(LibraryMessage::Loaded {
+                    songs,
+                    artists,
+                    albums,
+                    playlists,
+                    favorites,
+                }) => {
+                    self.tracks_tab.data = songs;
+                    self.artist_tab.data = artists;
+                    self.album_tab.data = albums;
+                    self.playlist_tab.data = playlists;
+                    self.favorite_tab.data = favorites;
+                    // self.library_rx = None;
+                    self.set_notification("Library Loaded");
+                }
+                Ok(LibraryMessage::SongsAppended(songs)) => {
+                    self.tracks_tab.data.extend(songs);
+                }
+                Ok(LibraryMessage::Error(e)) => {
+                    self.set_notification(format!("Load Error: {}", e));
+                    self.library_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {} // This means it is still loading
+                Err(_) => {
+                    self.library_rx = None;
+                }
+            }
+        }
         while let Ok(cmd) = self.command_receiver.try_recv() {
             match cmd {
                 PlayerCommand::Play => {
@@ -351,17 +407,96 @@ impl App {
                 }
             }
         }
+        if let Some(t) = self.last_search_keystroke
+            && t.elapsed() > Duration::from_millis(300)
+            && self.is_searching
+        {
+            self.last_search_keystroke = None;
+            self.perform_search().await?;
+        }
 
         self.check_track_finished().await?;
         self.update_mpris_position().await?;
+        self.tick_notification();
         Ok(())
     }
+    pub fn set_notification(&mut self, msg: impl Into<String>) {
+        self.widget_notification = Some((msg.into(), std::time::Instant::now()));
+    }
+    pub fn tick_notification(&mut self) {
+        if let Some((_, created)) = &self.widget_notification
+            && created.elapsed() >= self.w_notification_duration
+        {
+            self.widget_notification = None;
+        }
+    }
+    pub fn start_background_load(&mut self) {
+        let (tx, rx) = mpsc::channel(4);
+        self.library_rx = Some(rx);
+        let client = self.subsonic_client.clone();
+        tokio::spawn(async move {
+            let (first_page, artists, albums, playlists, favorites) = match tokio::try_join!(
+                client.get_album_page(0, 10),
+                // client.get_all_songs(),
+                client.get_all_artists(),
+                client.get_all_albums(),
+                client.get_playlists(),
+                client.get_all_favorites(),
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(LibraryMessage::Error(e.to_string())).await;
+                    return;
+                }
+            };
+            let first_songs = {
+                let futures = first_page.iter().map(|a| client.get_songs_in_album(a));
+                futures::future::join_all(futures)
+                    .await
+                    .into_iter()
+                    .flat_map(|r| r.unwrap_or_default())
+                    .collect::<Vec<_>>()
+            };
+            let _ = tx
+                .send(LibraryMessage::Loaded {
+                    songs: first_songs,
+                    artists,
+                    albums: albums.clone(),
+                    playlists,
+                    favorites,
+                })
+                .await;
+            let remaining = albums.iter().skip(10);
+            let chunks = remaining.collect::<Vec<_>>();
+            for c in chunks.chunks(100) {
+                let futures = c.iter().map(|a| client.get_songs_in_album(a));
+                let songs = futures::future::join_all(futures)
+                    .await
+                    .into_iter()
+                    .flat_map(|r| r.unwrap_or_default())
+                    .collect::<Vec<_>>();
+                if tx.send(LibraryMessage::SongsAppended(songs)).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
     pub async fn refresh_library(&mut self) -> Result<()> {
-        self.tracks_tab.data = self.subsonic_client.get_all_songs().await?;
-        self.artist_tab.data = self.subsonic_client.get_all_artists().await?;
-        self.album_tab.data = self.subsonic_client.get_all_albums().await?;
-        self.playlist_tab.data = self.subsonic_client.get_playlists().await?;
-        self.favorite_tab.data = self.subsonic_client.get_all_favorites().await?;
+        let client = self.subsonic_client.clone();
+        self.set_notification("Loading Library...");
+        let (songs, artist, albums, playlists, favorites) = tokio::try_join!(
+            client.get_all_songs(),
+            client.get_all_artists(),
+            client.get_all_albums(),
+            client.get_playlists(),
+            client.get_all_favorites(),
+        )?;
+        self.tracks_tab.data = songs;
+        self.artist_tab.data = artist;
+        self.album_tab.data = albums;
+        self.playlist_tab.data = playlists;
+        self.favorite_tab.data = favorites;
+
         Ok(())
     }
 }

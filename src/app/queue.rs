@@ -74,22 +74,41 @@ impl App {
                 if !self.queue_tab.data.is_empty() {
                     let song = self.queue_tab.get().unwrap();
                     self.subsonic_client.favorite_a_song(song, remove).await?;
+                    let msg = if remove {
+                        format!("Removed '{}' from favorites", song.title)
+                    } else {
+                        format!("Added '{}' to favorites", song.title)
+                    };
+                    self.set_notification(msg);
                 }
             }
             (ActiveSection::Others, ActiveTab::Songs) => {
                 if !self.tracks_tab.data.is_empty() {
                     let song = self.tracks_tab.get().unwrap();
                     self.subsonic_client.favorite_a_song(song, remove).await?;
+                    let msg = if remove {
+                        format!("Removed '{}' from favorites", song.title)
+                    } else {
+                        format!("Added '{}' to favorites", song.title)
+                    };
+                    self.set_notification(msg);
                 }
             }
             (ActiveSection::Others, ActiveTab::Search) => {
                 if !self.search_tab.data.is_empty() {
                     let song = self.search_tab.get().unwrap();
                     self.subsonic_client.favorite_a_song(song, remove).await?;
+                    let msg = if remove {
+                        format!("Removed '{}' from favorites", song.title)
+                    } else {
+                        format!("Added '{}' to favorites", song.title)
+                    };
+                    self.set_notification(msg);
                 }
             }
             _ => (),
-        }
+        };
+        self.favorite_tab.data = self.subsonic_client.get_all_favorites().await?;
         Ok(())
     }
 }

@@ -1,8 +1,11 @@
+use anyhow::Result;
 use futures::future;
 use mpris_server::{Metadata, Property};
-use anyhow::Result;
 
-use crate::{app::{ActiveSection, ActiveTab, AppError, Track, VolumeDirection}, mpris_handler::track_to_metadata};
+use crate::{
+    app::{ActiveSection, ActiveTab, AppError, Track, VolumeDirection},
+    mpris_handler::track_to_metadata,
+};
 
 use super::App;
 impl App {
@@ -33,7 +36,14 @@ impl App {
     }
 
     async fn start_playback(&mut self, track: Track, queue_index: usize) -> Result<()> {
-        let stream_url = self.subsonic_client.get_stream_url(&track.id)?;
+        let stream_url = match &self.config.search.mode {
+            crate::config::SearchMode::Remote => {
+                self.subsonic_client
+                    .get_stream_url_with_retry(&track.id, 5)
+                    .await?
+            }
+            crate::config::SearchMode::Local => self.subsonic_client.get_stream_url(&track.id)?,
+        };
         {
             let mut player = self.player.lock().await;
             player.load_url(&stream_url).await?;

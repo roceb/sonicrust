@@ -548,7 +548,7 @@ fn draw_song_list_styled(
             ])
         },
     );
-    let total= app.tracks_tab.len();
+    let total = app.tracks_tab.len();
     let title = active_title("Songs", total, is_active);
     render_stateful_list(
         f,
@@ -796,18 +796,29 @@ fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTh
         ActiveSection::Queue => "[Queue]",
         ActiveSection::Others => "[Library]",
     };
-    let controls = if app.input_mode == InputMode::InlineSearch {
-        format!("/ {}█  [Enter/Esc to exit inline search]", app.search_query)
-    } else {
-        format!(
-            "{} Space=Play/Pause ↑/↓=Navigate Enter=Play Tab=Switch Section 1-4=Tabs q=Quit ←/→=Seek +/-=Volume",
-            section_indicator
+
+    // Show notification if active, other show normal controls
+    let (controls, border_style, title) = if let Some((msg, _)) = &app.widget_notification {
+        (
+            format!("* {}", msg),
+            Style::default().fg(theme.accent),
+            "Notification",
         )
-    };
-    let border_style = if app.input_mode == InputMode::InlineSearch {
-        Style::default().fg(theme.accent)
+    } else if app.input_mode == InputMode::InlineSearch {
+        (
+            format!("/ {}█  [Enter/Esc to exit inline search]", app.search_query),
+            Style::default().fg(theme.accent),
+            "Find",
+        )
     } else {
-        Style::default()
+        (
+            format!(
+                "{} Space=Play/Pause ↑/↓=Navigate Enter=Play Tab=Switch Section 1-4=Tabs q=Quit ←/→=Seek +/-=Volume",
+                section_indicator
+            ),
+            Style::default(),
+            "Controls",
+        )
     };
     let controls_widget = Paragraph::new(controls)
         .style(
@@ -821,11 +832,7 @@ fn draw_player_controls(f: &mut Frame, app: &App, area: Rect, theme: &ResolvedTh
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title(if app.input_mode == InputMode::InlineSearch {
-                    "Find"
-                } else {
-                    "Controls"
-                }),
+                .title(title),
         );
     f.render_widget(controls_widget, area);
 }

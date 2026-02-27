@@ -199,8 +199,9 @@ impl PlayerInterface for MprisPlayer {
         match self.state.read() {
             Ok(s) => Ok(s.can_go_previous),
             Err(e) => {
-                eprintln!("Error, {}",e);
-                Ok(false)},
+                eprintln!("Error, {}", e);
+                Ok(false)
+            }
         }
     }
 
@@ -225,7 +226,7 @@ pub fn track_to_metadata(track: &Track) -> Metadata {
     // The Track ID must be a valid D-Bus ObjectPath
     let track_id = ObjectPath::try_from(format!(
         "/org/mpris/MediaPlayer2/Sonicrust/Track/{}",
-        track.id
+        track.id.replace('-', "_")
     ))
     .unwrap();
     let art_url = match track.cover_art.clone() {

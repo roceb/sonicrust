@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use crate::app;
 use crate::app::{Album, Artist, Playlists, Track};
 use crate::config::Config;
-use anyhow::{Context, Ok, Result};
-use ratatui::widgets::LegendPosition;
+use anyhow::Result;
 use serde::Deserialize;
 use url::Url;
 
@@ -24,7 +25,7 @@ struct SubsonicResponse<T> {
 struct SubsonicResponseInner<T> {
     status: String,
     #[serde(flatten)]
-    data: Option<T>,
+    data: T,
 }
 
 impl<T> SubsonicResponse<T> {
@@ -33,9 +34,8 @@ impl<T> SubsonicResponse<T> {
     }
     fn into_data(self) -> Result<T> {
         if self.is_ok() {
-            self.subsonic_response
-                .data
-                .context("Response OK but no data")
+            Ok(self.subsonic_response.data)
+            // .context("Response OK but no data")
         } else {
             Err(anyhow::anyhow!("Subsonic error response"))
         }
@@ -151,6 +151,7 @@ struct Song {
     play_count: Option<i32>,
     #[serde(rename = "displayAlbumArtist")]
     display_album_artist: Option<String>,
+    #[serde(default)]
     genres: Vec<Genres>,
 }
 
@@ -264,7 +265,7 @@ impl SubsonicClient {
                 "getAlbumList2",
                 vec![
                     ("type", "alphabeticalByArtist".to_string()),
-                    ("size", "500".to_string()),
+                    ("size", 500.to_string()),
                 ],
             )
             .await?;
@@ -276,6 +277,28 @@ impl SubsonicClient {
                 artist: album.artist,
             });
         }
+        Ok(albums)
+    }
+    pub async fn get_album_page(&self, offset: usize, limit: usize) -> Result<Vec<Album>> {
+        let data: GetAlbumListResponse = self
+            .get(
+                "getAlbumList2",
+                vec![
+                    ("type", "alphabeticalByArtist".to_string()),
+                    ("size", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
+            .await?;
+        let mut albums = Vec::new();
+        for a in data.album_list.album {
+            albums.push(Album {
+                id: a.id,
+                name: a.name,
+                artist: a.artist,
+            });
+        }
+
         Ok(albums)
     }
     pub async fn get_all_favorites(&self) -> Result<Vec<Track>> {
@@ -371,6 +394,35 @@ impl SubsonicClient {
             .flat_map(|r| r.unwrap_or_default())
             .collect::<Vec<_>>();
         Ok(a)
+    }
+    pub async fn get_stream_url_with_retry(&self, id: &str, timeout_secs: u64) -> Result<String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+        loop {
+            match self.get_stream_url(id) {
+                Ok(url) => {
+                    // Verify the URL is reachable
+                    match self.client.head(&url).send().await {
+                        Ok(resp) if resp.status().is_success() => return Ok(url),
+                        Ok(resp) => {
+                            if std::time::Instant::now() >= deadline {
+                                anyhow::bail!("Stream URL returned status: {}", resp.status());
+                            }
+                        }
+                        Err(e) => {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
     pub fn get_stream_url(&self, id: &str) -> Result<String> {
         let mut url = Url::parse(&format!("{}/rest/stream", self.base_url))?;
