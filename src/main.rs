@@ -73,8 +73,12 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
                     KeyCode::Char('j') | KeyCode::Down => app.next_item_in_tab(),
                     KeyCode::Enter => app.play_selected(app.find_selected()).await?,
                     KeyCode::Left => app.seek_backward().await?,
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        app.refresh_library().await?
+                    }
+                    KeyCode::Char('r') => app.toggle_repeat(),
+                    KeyCode::Char('S') => app.toggle_shuffle(),
                     KeyCode::Right => app.seek_forward().await?,
-                    KeyCode::Char('r') => app.refresh_library().await?,
                     KeyCode::Char('a') => app._add_to_queue().await?,
                     KeyCode::Char('+') => app.adjust_volume(app::VolumeDirection::Up).await?,
                     KeyCode::Char('-') => app.adjust_volume(app::VolumeDirection::Down).await?,

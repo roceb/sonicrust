@@ -1,5 +1,5 @@
 use crate::{
-    app::{ActiveSection, ActiveTab, App, InputMode, Track},
+    app::{ActiveSection, ActiveTab, App, InputMode, RepeatMode, ShuffleMode, Track},
     theme::ResolvedTheme,
 };
 use ratatui::{
@@ -198,15 +198,15 @@ fn draw_track_info(f: &mut Frame, app: &App, track: &Track, area: Rect, theme: &
     } else {
         Color::LightYellow
     };
-    let repeat_indicator = if app.on_repeat {
-        Span::styled("repeat: on", Style::default().fg(theme.accent))
-    } else {
-        Span::styled("repeat: off", Style::default().fg(theme.muted_color))
+    let repeat_indicator = match app.on_repeat {
+        RepeatMode::None => Span::styled("repeat: off", Style::default().fg(theme.accent)),
+        RepeatMode::One =>
+        Span::styled("repeat: one", Style::default().fg(theme.muted_color)),
+        RepeatMode::All => Span::styled("repeat: all", Style::default().fg(theme.muted_color))
     };
-    let shuffle_indicator = if app._on_shuffle {
-        Span::styled("shuffle: on", Style::default().fg(theme.accent))
-    } else {
-        Span::styled("shuffle: off", Style::default().fg(theme.muted_color))
+    let shuffle_indicator = match app.shuffle_mode {
+        ShuffleMode::On => Span::styled("shuffle: on", Style::default().fg(theme.accent)),
+            ShuffleMode::Off =>Span::styled("shuffle: off", Style::default().fg(theme.muted_color))
     };
     let info_lines = vec![
         Line::from(vec![

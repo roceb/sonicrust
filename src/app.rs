@@ -68,6 +68,17 @@ pub enum VolumeDirection {
     Down,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepeatMode {
+    None,
+    One,
+    All,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShuffleMode {
+    Off,
+    On,
+}
 pub struct TabSelection<T> {
     pub index: usize,
     pub state: ListState,
@@ -182,6 +193,11 @@ pub struct App {
     pub widget_notification: Option<(String, std::time::Instant)>,
     pub w_notification_duration: std::time::Duration,
     pub last_search_keystroke: Option<std::time::Instant>,
+    // Shuffle and repeat
+    pub on_repeat: RepeatMode,
+    pub shuffle_mode: ShuffleMode,
+    pub shuffle_order: Vec<usize>,
+    pub shuffle_position: usize,
     // TabSelection
     pub queue_tab: TabSelection<Track>,
     pub tracks_tab: TabSelection<Track>,
@@ -197,10 +213,6 @@ pub struct App {
     pub search_query: String,
     pub search_engine: SearchEngine,
     pub is_searching: bool,
-    // player status
-    pub on_repeat: bool,
-    // Need to work on the logic to allow shuffling
-    pub _on_shuffle: bool,
     pub cover_art_protocol: Option<StatefulProtocol>,
 }
 
@@ -301,8 +313,10 @@ impl App {
             search_query: String::new(),
             search_engine,
             is_searching: false,
-            on_repeat: false,
-            _on_shuffle: false,
+            on_repeat: RepeatMode::None,
+            shuffle_mode: ShuffleMode::Off,
+            shuffle_order: Vec::new(),
+            shuffle_position: 0,
             cover_art_protocol: None,
         };
 

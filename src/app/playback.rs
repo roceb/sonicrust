@@ -1,9 +1,10 @@
 use anyhow::Result;
 use futures::future;
 use mpris_server::{Metadata, Property};
+use rand::seq::SliceRandom;
 
 use crate::{
-    app::{ActiveSection, ActiveTab, AppError, Track, VolumeDirection},
+    app::{ActiveSection, ActiveTab, AppError, RepeatMode, ShuffleMode, Track, VolumeDirection},
     mpris_handler::track_to_metadata,
 };
 
@@ -59,14 +60,61 @@ impl App {
         self.subsonic_client.scrobble(&track, false).await?;
         Ok(())
     }
+    pub fn enable_shuffle(&mut self) {
+        if self.queue_tab.data.is_empty() {
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        let mut indices: Vec<usize> = (0..self.queue_tab.len()).collect();
+        indices.shuffle(&mut rng);
+        // Put current_track as first track
+        if let Some(pos) = indices.iter().position(|&i| i == self.playing_index) {
+            indices.swap(0, pos)
+        };
+        self.shuffle_order = indices;
+        self.shuffle_position = 0;
+        self.shuffle_mode = ShuffleMode::On;
+    }
+    pub fn disable_shuffle(&mut self) {
+        self.shuffle_mode = ShuffleMode::Off;
+        self.shuffle_order.clear();
+    }
+    pub fn toggle_shuffle(&mut self) {
+        match self.shuffle_mode {
+            ShuffleMode::Off => self.enable_shuffle(),
+            ShuffleMode::On => self.disable_shuffle(),
+        }
+    }
+    pub fn toggle_repeat(&mut self) {
+        self.on_repeat = match self.on_repeat {
+            RepeatMode::None => RepeatMode::One,
+            RepeatMode::One => RepeatMode::All,
+            RepeatMode::All => RepeatMode::None,
+        }
+    }
     pub async fn play_next(&mut self) -> Result<(), AppError> {
         if self.current_track.is_none() {
             return Err(AppError::NoTrackLoaded);
         }
+        if self.shuffle_mode == ShuffleMode::On && !self.shuffle_order.is_empty() {
+            self.shuffle_position = (self.shuffle_position + 1) % self.shuffle_order.len();
+            let idx = self.shuffle_order[self.shuffle_position];
+            self.play_from_queue(idx).await?;
+            return Ok(());
+        }
         if self.queue_tab.data.is_empty() {
             return Err(AppError::EmptyQueue);
         } else if self.playing_index < self.queue_tab.data.len() - 1 {
-            self.play_from_queue(self.playing_index + 1).await?;
+            match self.on_repeat {
+                RepeatMode::One => {
+                    self.play_selected(self.playing_index).await?;
+                }
+                RepeatMode::None => {
+                    self.playing_index += 1;
+                    self.play_from_queue(self.playing_index).await?;
+                }
+                RepeatMode::All => {}
+            }
         } else {
             self.player.lock().await.stop()?;
             self.is_playing = false;
@@ -156,15 +204,24 @@ impl App {
         self.subsonic_client
             .scrobble(self.current_track.as_ref().unwrap(), true)
             .await?;
-        if self.on_repeat {
-            self.play_selected(self.playing_index).await?;
-        } else if self.playing_index < self.queue_tab.data.len().saturating_sub(1) {
-            self.play_next().await?;
-        } else {
-            self.is_playing = false;
-            self.current_track = None;
-            self.metadata = Metadata::default();
-            self.sync_mpris().await;
+        match self.on_repeat {
+            RepeatMode::One => {
+                self.play_selected(self.playing_index).await?;
+            }
+            RepeatMode::All => {
+                let next = (self.playing_index + 1) % self.queue_tab.len();
+                self.play_from_queue(next).await?;
+            }
+            RepeatMode::None => {
+                if self.playing_index < self.queue_tab.data.len().saturating_sub(1) {
+                    self.play_next().await?;
+                } else {
+                    self.is_playing = false;
+                    self.current_track = None;
+                    self.metadata = Metadata::default();
+                    self.sync_mpris().await;
+                }
+            }
         }
         Ok(())
     }

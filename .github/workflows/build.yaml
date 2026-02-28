@@ -87,6 +87,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Add Dependency
@@ -119,9 +120,7 @@ jobs:
           echo "TARBALL_NAME=${TARBALL_NAME}" >> $GITHUB_ENV
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.TARBALL_NAME }}
-          generate_release_notes: true
+        run: |
+          gh release upload ${{ github.ref_name }} ${{env.TARBALL_NAME}} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
